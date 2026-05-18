@@ -2,24 +2,11 @@
 """
 BOSS直聘 AI Agent 岗位采集 + 技能分析工具
 
-功能:
-  1. 采集 BOSS 直聘 AI Agent 相关岗位
-  2. 爬取每个岗位的详细 JD（技能要求）
-  3. 分析个人技能差距，生成查漏补缺报告
-
-原理:
-  - Firefox + Playwright 绕过反爬
-  - 注入反检测脚本隐藏 webdriver
-  - 模拟人类行为（随机延迟/滚动/鼠标移动）
-  - 解码 BOSS 的 U+E030 数字加密
-
 用法:
-  python3 boss_firefox.py                 # 完整采集 + 技能分析
-  python3 boss_firefox.py --login         # 首次扫码登录
-  python3 boss_firefox.py --headless      # 无头模式
+  python3 boss_firefox.py                     # 采集+分析
+  python3 boss_firefox.py --login             # 首次扫码登录
+  python3 boss_firefox.py --headless          # 无头模式
   python3 boss_firefox.py --keywords "AI,Agent"
-  python3 boss_firefox.py --quick         # 仅列表页（不爬详情）
-  python3 boss_firefox.py --max-jobs 30   # 限制采集数量
 """
 
 import argparse
@@ -35,9 +22,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-# ============================================================
-# 配置
-# ============================================================
+# ── 配置 ──
 TODAY = date.today().isoformat()
 DATE_STR = date.today().strftime("%Y-%m-%d")
 
@@ -47,191 +32,22 @@ DEFAULT_KEYWORDS = [
     "MCP开发", "AIGC开发", "AI应用开发", "大模型工程师", "Prompt工程师",
 ]
 
-SALARY_MIN = 15
-SALARY_MAX = 35
-CITY_CODE = "100010000"  # 全国
+CITY_CODE = "100010000"
 OUTPUT_DIR = Path.home() / "AI" / "岗位日报"
 STATE_FILE = Path(__file__).parent / ".boss_profile" / "firefox_state.json"
+SALARY_MIN = 15
+SALARY_MAX = 35
 
-# ============================================================
-# 你的技能清单 — 用于对比分析
-# ============================================================
-MY_SKILLS = {
-    "编程语言": {"Python", "TypeScript", "JavaScript"},
-    "AI框架/工具": {"LangChain", "LangGraph", "AutoGen", "CrewAI", "Dify", "Coze"},
-    "大模型技术": {"LLM", "AI Agent", "RAG", "微调(Finetune)", "MCP", "Prompt Engineering", "Function Calling", "Tool Calling", "Embedding"},
-    "数据库/向量库": {"MySQL", "Milvus", "FAISS", "Chroma", "Qdrant"},
-    "部署/运维": {"Docker", "FastAPI", "Kubernetes"},
-    "AI平台/模型": {"Claude", "OpenAI", "GPT"},
-}
-
-# 所有技能关键词（扁平化，用于匹配 JD）
-MY_SKILL_KEYWORDS = set()
-for items in MY_SKILLS.values():
-    MY_SKILL_KEYWORDS.update(items)
-
-# JD 通用技能词库（用于识别岗位要求的所有技能）
-ALL_SKILL_KEYWORDS = MY_SKILL_KEYWORDS | {
-    # 编程语言
-    "Python", "Java", "Go", "Golang", "Rust", "C++", "C#", "C", "PHP", "Ruby", "Swift", "Kotlin", "Scala",
-    "TypeScript", "JavaScript", "Node.js", "Deno",
-    # 前端
-    "React", "Vue", "Angular", "Next.js", "Nuxt", "HTML", "CSS", "Tailwind", "Webpack",
-    # AI/ML
-    "PyTorch", "TensorFlow", "Transformers", "vLLM", "ONNX", "HuggingFace", "GGUF",
-    "LangChain", "LangGraph", "LlamaIndex", "AutoGen", "CrewAI", "Dify", "Coze", "MCP",
-    "RAG", "Fine-tuning", "Finetune", "微调", "SFT", "RLHF", "LoRA", "QLoRA",
-    "Prompt", "Function Calling", "Tool Calling", "Agent", "Multi-Agent", "Embedding",
-    "Stable Diffusion", "AIGC", "Diffusion", "Vision", "Multimodal",
-    # 数据库
-    "MySQL", "PostgreSQL", "Redis", "MongoDB", "Elasticsearch",
-    "Milvus", "FAISS", "Chroma", "Qdrant", "Pinecone", "Weaviate",
-    "Kafka", "RabbitMQ", "MQTT",
-    # 架构/中间件
-    "Docker", "Kubernetes", "K8s", "FastAPI", "Flask", "Django", "Spring", "Spring Boot",
-    "Nginx", "gRPC", "GraphQL", "WebSocket", "REST", "RESTful",
-    "CI/CD", "GitHub Actions", "GitLab CI", "Jenkins", "ArgoCD",
-    # 云/部署
-    "AWS", "GCP", "Azure", "阿里云", "腾讯云", "GPU", "CUDA", "Linux",
-    # 经典计算机
-    "数据结构", "算法", "系统设计", "架构", "微服务", "高并发", "分布式",
-    "设计模式", "OOP", "TDD", "单元测试", "测试",
-}
-
-
-def decode_boss_salary(text: str) -> str:
-    """解码 BOSS U+E030-E039 加密数字"""
-    result = []
-    for c in text:
-        cp = ord(c)
-        if 0xE030 <= cp <= 0xE039:
-            result.append(str(cp - 0xE030))
-        else:
-            result.append(c)
-    return "".join(result)
-
-
-def salary_ok(text: str) -> bool:
-    if not text:
-        return False
-    s = text.replace("~", "-").replace("—", "-").replace("K", "").replace("k", "")
-    s = re.sub(r"[^\d-]", "", s)
-    nums = re.findall(r"(\d+)", s)
-    if len(nums) >= 2:
-        low, high = int(nums[0]), int(nums[1])
-        if low < 5 and high < 20:
-            low *= 10
-            high *= 10
-        return low >= 15 and high <= 35
-    return False
-
-
-def human_delay(min_s=1.0, max_s=3.0):
-    """模拟人类操作的随机延迟"""
-    time.sleep(random.uniform(min_s, max_s))
-
-
-def parse_jd_skills(text: str) -> dict:
-    """从 JD 描述中提取技能，分类统计"""
-    tl = text.lower()
-    found = defaultdict(list)
-
-    for skill in ALL_SKILL_KEYWORDS:
-        if skill.lower() in tl:
-            # 分类
-            if skill in {"Python", "Java", "Go", "Golang", "Rust", "C++", "C#", 
-                         "PHP", "Ruby", "Swift", "Kotlin", "Scala", "TypeScript",
-                         "JavaScript", "Node.js"}:
-                found["编程语言"].append(skill)
-            elif skill in {"React", "Vue", "Angular", "Next.js", "HTML", "CSS", "Tailwind"}:
-                found["前端"].append(skill)
-            elif skill in {"PyTorch", "TensorFlow", "Transformers", "vLLM", "ONNX", 
-                          "HuggingFace", "Stable Diffusion", "Diffusion", "Vision", "Multimodal"}:
-                found["AI/ML框架"].append(skill)
-            elif skill in {"LangChain", "LangGraph", "LlamaIndex", "AutoGen", "CrewAI", "Dify", "Coze", "MCP"}:
-                found["AI框架/工具"].append(skill)
-            elif skill in {"RAG", "Fine-tuning", "Finetune", "微调", "SFT", "RLHF", "LoRA", "QLoRA",
-                          "Prompt", "Function Calling", "Tool Calling", "Agent", "Multi-Agent",
-                          "Embedding", "LLM"}:
-                found["大模型技术"].append(skill)
-            elif skill in {"MySQL", "PostgreSQL", "Redis", "MongoDB", "Elasticsearch",
-                          "Milvus", "FAISS", "Chroma", "Qdrant", "Pinecone", "Weaviate",
-                          "Kafka", "RabbitMQ"}:
-                found["数据库/中间件"].append(skill)
-            elif skill in {"Docker", "Kubernetes", "K8s", "FastAPI", "Flask", "Django", "Spring",
-                          "Nginx", "gRPC", "GraphQL", "WebSocket", "CI/CD", "GitHub Actions",
-                          "Linux", "GPU", "CUDA"}:
-                found["部署/架构"].append(skill)
-            elif skill in {"AWS", "GCP", "Azure", "阿里云", "腾讯云"}:
-                found["云平台"].append(skill)
-            else:
-                found["其他"].append(skill)
-
-    return dict(found)
-
-
-def analyze_skill_gap(all_jobs: list) -> dict:
-    """分析技能差距：岗位要求 vs 个人技能"""
-    skill_counter = Counter()
-    skill_jd_examples = defaultdict(list)
-
-    for job in all_jobs:
-        # 从 JD 描述 + 岗位标题 中分析技能
-        jd_text = (job.get("description", "") or "") + " " + (job.get("title", "") or "")
-        jd_skills = parse_jd_skills(jd_text)
-
-        # 统计每个技能的出现次数
-        seen_in_job = set()
-        for cat, skills in jd_skills.items():
-            for s in skills:
-                s_lower = s.lower()
-                if s_lower not in seen_in_job:
-                    seen_in_job.add(s_lower)
-                    skill_counter[s] += 1
-
-        # 记录示例（每个技能取前3个 JD）
-        for cat, skills in jd_skills.items():
-            for s in skills:
-                if len(skill_jd_examples[s]) < 3:
-                    skill_jd_examples[s].append({
-                        "title": job["title"],
-                        "company": job.get("company", ""),
-                        "salary": job["salary"],
-                    })
-
-    # 分类
-    my_skills_set = {s.lower() for s in MY_SKILL_KEYWORDS}
-
-    have = []
-    missing = []
-
-    for skill, count in skill_counter.most_common():
-        examples = skill_jd_examples.get(skill, [])
-        entry = {"skill": skill, "count": count, "examples": examples}
-        if skill.lower() in my_skills_set:
-            have.append(entry)
-        else:
-            missing.append(entry)
-
-    return {"have": have, "missing": missing, "total_jobs": len(all_jobs)}
-
-
-# ============================================================
-# 反检测脚本
-# ============================================================
+# ── 反检测脚本 ──
 ANTI_DETECT = """
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
 Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN', 'zh', 'en']});
 Object.defineProperty(navigator, 'platform', {get: () => 'MacIntel'});
 Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
 Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
-// 添加更多插件
 Object.defineProperty(navigator, 'plugins', {get: () => [
-    {name: 'Chrome PDF Plugin'},
-    {name: 'Chrome PDF Viewer'},
-    {name: 'Native Client'}
+    {name: 'Chrome PDF Plugin'}, {name: 'Chrome PDF Viewer'}, {name: 'Native Client'}
 ]});
-// 覆盖权限查询
 if (window.Permissions) {
     const orig = window.Permissions.prototype.query;
     window.Permissions.prototype.query = function(d) {
@@ -241,38 +57,115 @@ if (window.Permissions) {
 }
 """
 
+# ── 技能词库 ──
+SKILL_KEYWORDS = {
+    "编程语言": {"Python", "Java", "Go", "Golang", "Rust", "C++", "C#", "C", "PHP",
+                  "Ruby", "Swift", "Kotlin", "Scala", "TypeScript", "JavaScript", "Node.js"},
+    "前端": {"React", "Vue", "Angular", "Next.js", "HTML", "CSS", "Tailwind"},
+    "AI/ML框架": {"PyTorch", "TensorFlow", "Transformers", "vLLM", "ONNX", "HuggingFace", "GGUF",
+                   "Stable Diffusion", "Diffusion", "Vision", "Multimodal"},
+    "AI框架/工具": {"LangChain", "LangGraph", "LlamaIndex", "AutoGen", "CrewAI", "Dify", "Coze", "MCP"},
+    "大模型技术": {"RAG", "Fine-tuning", "Finetune", "微调", "SFT", "RLHF", "LoRA", "QLoRA",
+                   "Prompt", "Function Calling", "Tool Calling", "Agent", "Multi-Agent",
+                   "Embedding", "LLM", "AI Agent", "AIGC"},
+    "数据库/中间件": {"MySQL", "PostgreSQL", "Redis", "MongoDB", "Elasticsearch",
+                      "Milvus", "FAISS", "Chroma", "Qdrant", "Pinecone", "Weaviate",
+                      "Kafka", "RabbitMQ"},
+    "部署/架构": {"Docker", "Kubernetes", "K8s", "FastAPI", "Flask", "Django", "Spring",
+                  "Nginx", "gRPC", "GraphQL", "WebSocket", "REST", "RESTful",
+                  "CI/CD", "GitHub Actions", "Linux", "GPU", "CUDA"},
+    "云平台": {"AWS", "GCP", "Azure", "阿里云", "腾讯云"},
+    "其他": {"数据结构", "算法", "系统设计", "架构", "微服务", "高并发", "分布式",
+              "设计模式", "OOP", "TDD", "单元测试", "测试"},
+}
+ALL_SKILLS = {s for cat in SKILL_KEYWORDS.values() for s in cat}
 
-class BossFirefoxScraper:
-    def __init__(self, headless: bool = False):
+# 你的技能（用于对比分析）
+MY_SKILLS = {
+    "编程语言": {"Python", "TypeScript", "JavaScript"},
+    "AI框架/工具": {"LangChain", "LangGraph", "AutoGen", "CrewAI", "Dify", "Coze"},
+    "大模型技术": {"LLM", "AI Agent", "RAG", "微调(Finetune)", "MCP", "Prompt Engineering",
+                   "Function Calling", "Tool Calling", "Embedding"},
+    "数据库/向量库": {"MySQL", "Milvus", "FAISS", "Chroma", "Qdrant"},
+    "部署/运维": {"Docker", "FastAPI", "Kubernetes"},
+    "AI平台/模型": {"Claude", "OpenAI", "GPT"},
+}
+MY_SKILL_FLAT = {s.lower() for cat in MY_SKILLS.values() for s in cat}
+
+
+# ══════════════════════════════════════════════
+#  工具函数
+# ══════════════════════════════════════════════
+
+def decode_salary(text: str) -> str:
+    """解码 BOSS U+E030-E039 加密薪资数字"""
+    return "".join(str(ord(c) - 0xE030) if 0xE030 <= ord(c) <= 0xE039 else c for c in text)
+
+
+def salary_in_range(text: str) -> bool:
+    """15K <= 薪资 <= 35K"""
+    if not text:
+        return False
+    nums = re.findall(r"(\d+)", re.sub(r"[^\d-]", "", text.replace("~", "-").replace("K", "").replace("k", "")))
+    if len(nums) < 2:
+        return False
+    low, high = int(nums[0]), int(nums[1])
+    if low < 5 and high < 20:
+        low *= 10
+        high *= 10
+    return 15 <= low and high <= 35
+
+
+def human_pause(a=1.0, b=3.0):
+    time.sleep(random.uniform(a, b))
+
+
+def parse_skills(text: str) -> dict:
+    """从文本中提取技能，按分类返回"""
+    tl = text.lower()
+    result = defaultdict(list)
+    for cat, skills in SKILL_KEYWORDS.items():
+        for s in skills:
+            if s.lower() in tl:
+                result[cat].append(s)
+    return dict(result)
+
+
+# ══════════════════════════════════════════════
+#  浏览器控制
+# ══════════════════════════════════════════════
+
+class BossScraper:
+    def __init__(self, headless=False):
         self.headless = headless
-        self.playwright = None
-        self.browser = None
-        self.context = None
+        self._pw = None
+        self._browser = None
+        self._ctx = None
         self.page = None
 
     def start(self):
-        self.playwright = sync_playwright().start()
-        self.browser = self.playwright.firefox.launch(headless=self.headless)
-
-        ctx_kwargs = {
-            "viewport": {"width": 1280, "height": 800},
-            "locale": "zh-CN",
-        }
+        self._pw = sync_playwright().start()
+        self._browser = self._pw.firefox.launch(headless=self.headless)
+        ctx_kw = {"viewport": {"width": 1280, "height": 800}, "locale": "zh-CN"}
         if STATE_FILE.exists():
-            ctx_kwargs["storage_state"] = str(STATE_FILE)
-
-        self.context = self.browser.new_context(**ctx_kwargs)
-        self.page = self.context.new_page()
+            ctx_kw["storage_state"] = str(STATE_FILE)
+        self._ctx = self._browser.new_context(**ctx_kw)
+        self.page = self._ctx.new_page()
         self.page.set_default_timeout(30000)
         self.page.add_init_script(ANTI_DETECT)
 
-    def login(self):
-        self.page.goto("https://www.zhipin.com/web/user/?ka=header-login")
-        human_delay(2, 4)
-        self.page.bring_to_front()
+    def close(self):
+        if self._browser:
+            self._browser.close()
+        if self._pw:
+            self._pw.stop()
 
-        print("\n🔓 浏览器已打开 BOSS 直聘登录页")
-        print("请扫码登录，检测到登录后自动保存状态...")
+    def login(self):
+        """扫码登录并保存状态"""
+        self.page.goto("https://www.zhipin.com/web/user/?ka=header-login")
+        human_pause(2, 4)
+        self.page.bring_to_front()
+        print("\n🔓 浏览器已打开，请扫码登录")
 
         last_url = self.page.url
         for i in range(600):
@@ -281,577 +174,370 @@ class BossFirefoxScraper:
                 url = self.page.evaluate("window.location.href")
             except Exception:
                 continue
-            if url != last_url:
-                if any(p in url for p in ["/web/geek", "/web/chat", "/web/expect", "/web/message"]):
-                    print(f"✅ 登录成功!")
-                    break
-                last_url = url
+            if url != last_url and any(p in url for p in ["/web/geek", "/web/chat"]):
+                print("✅ 登录成功")
+                break
+            last_url = url
             if i > 0 and i % 30 == 0:
-                print(f"  ⏳ {i}s...")
+                print(f"  ⏳ {i}s")
 
-        state = self.context.storage_state()
+        state = self._ctx.storage_state()
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(STATE_FILE, "w") as f:
             json.dump(state, f, ensure_ascii=False)
-        print(f"✅ 登录状态已保存")
+        print("✅ 状态已保存")
 
-    def human_scroll(self, times=3):
-        """模拟人类滚动页面"""
-        for _ in range(times):
-            try:
-                offset = random.randint(300, 700)
-                self.page.evaluate(f"window.scrollBy(0, {offset})")
-                human_delay(0.8, 2.0)
-            except Exception:
-                break
-
-    def get_listing_links(self, keyword: str) -> list[dict]:
-        """获取搜索结果页的岗位信息（含薪资）"""
-        encoded = keyword.replace(" ", "+")
-        url = f"https://www.zhipin.com/web/geek/job?query={encoded}&city={CITY_CODE}"
-
-        self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        human_delay(3, 5)
-        # 大幅滚动到底部，触发所有岗位详情加载
+    def _scroll_all(self):
+        """滚动到底部再回顶再到底，触发懒加载"""
         try:
             self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            human_delay(2, 3)
+            human_pause(2, 3)
             self.page.evaluate("window.scrollTo(0, 0)")
-            human_delay(1, 2)
+            human_pause(1, 2)
             self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            human_delay(2, 3)
-        except:
+            human_pause(2, 3)
+        except Exception:
             pass
-        self.human_scroll(4)
-        human_delay(1, 2)
 
-        # 从 body 文本中提取岗位信息
+    def _extract_links(self) -> list[dict]:
+        """提取当前页面上的详情页链接"""
+        try:
+            return self.page.evaluate("""() => {
+                const items = [], seen = new Set();
+                document.querySelectorAll('a[href*="/job_detail/"]').forEach(a => {
+                    const href = a.href, text = (a.innerText || '').trim();
+                    if (href && text && !seen.has(href) && text.length < 60) {
+                        seen.add(href);
+                        items.push({href, title: text.substring(0, 60)});
+                    }
+                });
+                return items;
+            }""")
+        except Exception:
+            return []
+
+    def search(self, keyword: str) -> list[dict]:
+        """搜一个关键词，返回岗位列表（含描述原文）"""
+        url = "https://www.zhipin.com/web/geek/job?query=%s&city=%s" % (
+            keyword.replace(" ", "+"), CITY_CODE)
+        self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        human_pause(3, 5)
+        self._scroll_all()
+
         body = self.page.inner_text("body")
         lines = [l.strip() for l in body.split("\n") if l.strip()]
 
-        # 第一步：定位所有岗位的薪资行位置
-        salary_positions = []
-        for i, line in enumerate(lines):
-            decoded = decode_boss_salary(line)
-            if re.search(r"\d+[-~]\d+K", decoded, re.I):
-                salary_positions.append(i)
+        # 1) 定位薪资行
+        sal_idx = []
+        for i, l in enumerate(lines):
+            if re.search(r"\d+[-~]\d+K", decode_salary(l), re.I):
+                sal_idx.append(i)
 
-        # 第二步：提取每个岗位的基本信息
+        # 2) 提取基本信息
         jobs = []
-        for idx, si in enumerate(salary_positions):
-            if idx > 0 and si - salary_positions[idx-1] < 3:
-                continue  # 跳过重复的薪资行
+        for n, si in enumerate(sal_idx):
+            if n > 0 and si - sal_idx[n - 1] < 3:
+                continue
             if si == 0:
                 continue
             title = lines[si - 1]
             if not (2 < len(title) < 60):
                 continue
-            salary = decode_boss_salary(lines[si])
-            
-            company = ""
-            experience = ""
-            education = ""
-            city = ""
-            
-            # 找薪资行后面几行的信息
-            end_pos = salary_positions[idx + 1] if idx + 1 < len(salary_positions) else min(si + 10, len(lines))
-            for j in range(si + 1, min(end_pos, len(lines))):
+
+            salary = decode_salary(lines[si])
+            company = exp = edu = city = ""
+            end = sal_idx[n + 1] if n + 1 < len(sal_idx) else min(si + 10, len(lines))
+            for j in range(si + 1, min(end, len(lines))):
                 ln = lines[j]
                 if "经验" in ln or "应届" in ln:
-                    experience = ln
-                elif "本科" in ln or "硕士" in ln or "博士" in ln or "大专" in ln or "学历不限" in ln:
-                    education = ln
+                    exp = ln
+                elif re.search(r"本科|硕士|博士|大专|学历不限", ln):
+                    edu = ln
                 elif "·" in ln and len(ln) < 30:
                     city = ln
-                elif len(ln) > 2 and len(ln) < 40 and not re.search(r"年|学历|大专|本科|硕士|博士|不限|应届|·", ln) and not company:
+                elif not company and len(ln) > 2 and len(ln) < 40 \
+                        and not re.search(r"年|学历|大专|本科|硕士|博士|不限|应届|·", ln):
                     company = ln
 
             jobs.append({"title": title, "salary": salary, "company": company,
-                        "experience": experience, "education": education, "city": city,
-                        "description": "", "href": ""})
+                         "experience": exp, "education": edu, "city": city,
+                         "description": "", "href": ""})
 
-        # 第三步：从页面底部提取"职位描述"段落，关联到对应岗位
-        # 找到所有"职位描述"/"岗位职责"行的位置
-        desc_starts = [i for i, l in enumerate(lines) if "职位描述" in l or "岗位职责" in l]
-        # 找到每个描述段落的范围，往前关联到最近的薪资行
-        for ds in desc_starts:
-            # 找最近的薪资行（往前）
-            nearest_salary = -1
-            nearest_dist = 999
-            for si in salary_positions:
-                if si < ds and ds - si < nearest_dist:
-                    nearest_dist = ds - si
-                    nearest_salary = si
-            
-            if nearest_salary >= 0:
-                # 找到这个薪资行对应的岗位
-                for j in jobs:
-                    if j["salary"] == decode_boss_salary(lines[nearest_salary]) and lines[nearest_salary - 1] == j["title"]:
-                        # 收集描述文本（从"职位描述"到下一个"职位描述"或到页尾）
-                        desc_text = []
-                        for k in range(ds, min(ds + 50, len(lines))):
-                            if k != ds and ("职位描述" in lines[k] or "岗位职责" in lines[k]):
-                                break
-                            desc_text.append(lines[k])
-                        j["description"] = "\n".join(desc_text)
-                        break
-
-        # 同时提取详情页链接
-        links = self._extract_links_from_page(keyword)
-        # 把链接合并到 jobs 中（按 title 匹配）
-        if links:
-            link_map = {}
-            for l in links:
-                t = l["title"][:10]
-                if t:
-                    link_map[t] = l["href"]
+        # 3) 页面底部有"职位描述"段落，关联到最近的上一个岗位
+        desc_rows = {i for i, l in enumerate(lines) if "职位描述" in l or "岗位职责" in l}
+        for dr in desc_rows:
+            # 往前找最近薪资行
+            prev_si = max([si for si in sal_idx if si < dr] or [-1])
+            if prev_si < 0:
+                continue
+            # 匹配到对应岗位
+            target = None
             for j in jobs:
-                t = j["title"][:10]
-                if t in link_map and not j["href"]:
-                    j["href"] = link_map[t]
+                if decode_salary(lines[prev_si]) == j["salary"] and lines[prev_si - 1] == j["title"]:
+                    target = j
+                    break
+            if target is None:
+                continue
+            # 收集描述文本
+            seg = []
+            for k in range(dr, min(dr + 60, len(lines))):
+                if k != dr and ("职位描述" in lines[k] or "岗位职责" in lines[k]):
+                    break
+                seg.append(lines[k])
+            target["description"] = "\n".join(seg)
+
+        # 4) 合并详情页链接（按标题前10字匹配）
+        links = self._extract_links()
+        if links:
+            lmap = {l["title"][:10]: l["href"] for l in links if l["title"][:10]}
+            for j in jobs:
+                if not j["href"] and j["title"][:10] in lmap:
+                    j["href"] = lmap[j["title"][:10]]
 
         return jobs
 
-    def _extract_links_from_page(self, keyword: str) -> list[dict]:
-        """从当前页面提取岗位详情页链接"""
-        try:
-            js = """
-            (() => {
-                const items = [];
-                const seen = new Set();
-                const links = document.querySelectorAll('a[href*="/job_detail/"]');
-                for (const a of links) {
-                    const href = a.href;
-                    const text = (a.innerText || '').trim();
-                    if (href && text && !seen.has(href) && text.length > 1 && text.length < 60) {
-                        seen.add(href);
-                        items.push({href: href, title: text.substring(0, 60)});
-                    }
-                }
-                return items;
-            })()
-            """
-            return self.page.evaluate(js)
-        except Exception as e:
-            print(f"  ⚠️ 提取链接失败: {e}")
-            return []
 
-    def fetch_jd_detail(self, url: str) -> dict:
-        """爬取单个岗位的详情 JD"""
-        self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        human_delay(2, 4)
+# ══════════════════════════════════════════════
+#  分析
+# ══════════════════════════════════════════════
 
-        # 模拟人类阅读
-        self.human_scroll(2)
-
-        detail = self.page.evaluate("""() => {
-            const get = (selectors) => {
-                for (const s of selectors) {
-                    const el = document.querySelector(s);
-                    if (el) return el.innerText.trim();
-                }
-                return '';
-            };
-            return {
-                name: get(['.job-name', '.name', 'h1', '.job-title']),
-                salary: get(['.salary', '.job-salary', '[class*=salary]']),
-                company: get(['.company-name', '.company-info h2', '[class*=company-name]', '[class*=company]']),
-                description: get(['.job-sec-text', '.job-detail-section .text', '.job-description',
-                                 '[class*=job-sec-text]', '[class*=detail-content]']),
-                tags: (() => {
-                    const els = document.querySelectorAll('.tag-item, .job-tags span, [class*=tag]');
-                    return Array.from(els).map(e => e.innerText.trim()).filter(Boolean).slice(0, 20);
-                })(),
-            };
-        }""")
-
-        # 公司名如果太长则截断
-        company = detail.get("company", "")
-        if len(company) > 40:
-            company = company[:40]
-
-        return {
-            "url": url,
-            "title": detail.get("name", ""),
-            "salary": decode_boss_salary(detail.get("salary", "")),
-            "company": company,
-            "description": detail.get("description", ""),
-            "tags": detail.get("tags", []),
-        }
-
-    def close(self):
-        if self.browser:
-            self.browser.close()
-        if self.playwright:
-            self.playwright.stop()
-
-
-# ============================================================
-# 报告生成
-# ============================================================
-def render_skill_report(gap: dict, jobs: list) -> str:
-    lines = [f"# AI Agent 技能差距分析报告 · {DATE_STR}\n"]
-    lines.append(f"> 基于 BOSS 直聘 {gap['total_jobs']} 个 AI Agent 相关岗位 JD 分析\n---\n")
-
-    # 一、你已拥有的技能（市场需求验证）
-    lines.append("## 一、✅ 你已拥有的技能")
-    lines.append("> 这些技能市场上有需求，你已掌握。\n")
-
-    have_sorted = sorted(gap["have"], key=lambda x: -x["count"])
-    for item in have_sorted:
-        bar = "■" * min(item["count"] // 2 + 1, 20)
-        lines.append(f"- **{item['skill']}**: {bar} ({item['count']}个岗位要求)")
-        if item["examples"]:
-            ex = item["examples"][0]
-            lines.append(f"  - 例如: {ex['title']} @ {ex['company']} ({ex['salary']})")
-    lines.append("")
-
-    # 二、查漏补缺 — 市场需要但你不会的技能
-    lines.append("## 二、🔍 需要查漏补缺")
-    lines.append("> 这些技能市场上有大量需求，建议优先学习。\n")
-
-    missing_sorted = sorted(gap["missing"], key=lambda x: -x["count"])
-    for item in missing_sorted[:30]:
-        bar = "■" * min(item["count"] // 2 + 1, 20)
-        priority = "🔴" if item["count"] >= 10 else "🟡" if item["count"] >= 5 else "🟢"
-        lines.append(f"- {priority} **{item['skill']}**: {bar} ({item['count']}个岗位要求)")
-        if item["examples"]:
-            ex = item["examples"][0]
-            lines.append(f"  - 例如: {ex['title']} @ {ex['company']} ({ex['salary']})")
-    lines.append("")
-
-    # 三、按岗位技能分类统计
-    lines.append("## 三、📊 技能分类统计")
-    lines.append("> 岗位要求技能的分布情况\n")
-
-    cat_counter = Counter()
-    for job in jobs:
-        jd = job.get("description", "") or ""
-        title = job.get("title", "") or ""
-        text = jd + " " + title
-        skills = parse_jd_skills(text)
-        seen_cats = set()
-        for cat in skills:
-            cat_lower = cat.lower()
-            if cat_lower not in seen_cats:
-                seen_cats.add(cat_lower)
-                cat_counter[cat] += 1
-
-    for cat, count in cat_counter.most_common():
-        pct = count / len(jobs) * 100 if jobs else 0
-        bar = "█" * min(int(pct // 3), 30)
-        lines.append(f"- {cat}: {bar} {count}/{len(jobs)} ({pct:.0f}%)")
-
-    lines.append("\n---\n## 📋 完整岗位列表\n")
-
-    for i, j in enumerate(jobs, 1):
-        lines.append(f"### {i}. {j['title']}")
-        lines.append(f"- 公司: {j.get('company', '未显示')}")
-        lines.append(f"- 薪资: {j['salary']}")
-        if j.get("experience"):
-            lines.append(f"- 经验: {j['experience']}")
-
-        # JD 摘要
-        desc = j.get("description", "") or ""
-        if desc:
-            # 提取关键技能
-            skills = parse_jd_skills(desc)
-            if skills:
-                tags = []
-                for cat, items in skills.items():
-                    tags.extend(items)
-                lines.append(f"- 技能要求: {' '.join(f'`{t}`' for t in tags[:10])}")
-            lines.append("\n**岗位要求：**\n```\n" + desc[:500] + "\n```")
-        lines.append("\n---\n")
-
-    lines.append(f"\n*数据采集于 {DATE_STR}，BOSS直聘*\n")
-    return "\n".join(lines)
-
-
-def render_daily_report(jobs: list) -> str:
-    lines = [f"# 招聘日报 · {DATE_STR}\n"]
-    lines.append(f"> 来源：**BOSS直聘** · 薪资 **15K-35K** · 共 {len(jobs)} 条\n---\n")
-
-    # 技能分类统计
-    cat_counter = Counter()
+def skill_gap(jobs: list) -> dict:
+    c = Counter()
+    ex = defaultdict(list)
     for j in jobs:
-        desc = j.get("description", "") or ""
-        title = j.get("title", "") or ""
-        text = desc + " " + title
-        skills = parse_jd_skills(text)
+        text = (j.get("description") or "") + " " + (j.get("title") or "")
         seen = set()
-        for cat in skills:
+        for cat, skills in parse_skills(text).items():
+            for s in skills:
+                if s.lower() not in seen:
+                    seen.add(s.lower())
+                    c[s] += 1
+                    if len(ex[s]) < 3:
+                        ex[s].append({"title": j["title"], "company": j.get("company", ""), "salary": j["salary"]})
+    have, miss = [], []
+    for s, cnt in c.most_common():
+        entry = {"skill": s, "count": cnt, "examples": ex.get(s, [])}
+        (have if s.lower() in MY_SKILL_FLAT else miss).append(entry)
+    return {"have": have, "missing": miss, "total": len(jobs)}
+
+
+# ══════════════════════════════════════════════
+#  输出
+# ══════════════════════════════════════════════
+
+def daily_report(jobs: list) -> str:
+    lines = ["# 招聘日报 · %s\n" % DATE_STR]
+    lines.append("> 来源：**BOSS直聘** · 薪资 **15K-35K** · 共 %d 条\n---\n" % len(jobs))
+
+    # 分类统计
+    cc = Counter()
+    for j in jobs:
+        text = (j.get("description") or "") + " " + (j.get("title") or "")
+        seen = set()
+        for cat in parse_skills(text):
             if cat not in seen:
                 seen.add(cat)
-                cat_counter[cat] += 1
-
-    if cat_counter:
+                cc[cat] += 1
+    if cc:
         lines.append("### 技能要求分布\n")
-        for cat, count in cat_counter.most_common():
-            pct = count / len(jobs) * 100 if jobs else 0
-            bar = "█" * min(int(pct // 3), 30)
-            lines.append(f"- {cat}: {bar} ({count}个岗位, {pct:.0f}%)")
+        for cat, n in cc.most_common():
+            bar = "█" * min(int(n / len(jobs) * 100 / 3), 30)
+            lines.append("- %s: %s (%d个岗位, %d%%)" % (cat, bar, n, n * 100 // len(jobs)))
         lines.append("\n---\n")
 
     for i, j in enumerate(jobs, 1):
-        lines.append("### %d. %s %s" % (i, j['title'], j['salary']))
-        lines.append("- 公司: %s" % (j.get('company', '未显示')))
+        lines.append("### %d. %s %s" % (i, j["title"], j["salary"]))
+        lines.append("- 公司: %s" % (j.get("company") or "未显示"))
         if j.get("city"):
-            lines.append("- 城市: %s" % j['city'])
+            lines.append("- 城市: %s" % j["city"])
         if j.get("experience"):
-            lines.append("- 经验: %s" % j['experience'])
+            lines.append("- 经验: %s" % j["experience"])
         if j.get("education"):
-            lines.append("- 学历: %s" % j['education'])
-        if j.get("url"):
-            lines.append("- 链接: %s" % j['url'])
-        desc = j.get("description", "") or ""
+            lines.append("- 学历: %s" % j["education"])
+        if j.get("href"):
+            lines.append("- 链接: %s" % j["href"])
+        desc = j.get("description", "")
         if desc:
             lines.append("")
             lines.append(desc[:1200])
             lines.append("")
-        lines.append("---")
-        lines.append("")
-
-    lines.append(f"\n*数据采集于 {DATE_STR}，BOSS直聘*\n")
+        lines.append("---\n")
+    lines.append("\n*数据采集于 %s，BOSS直聘*\n" % DATE_STR)
     return "\n".join(lines)
 
 
-def save_to_mysql(jobs: list):
-    db_password = os.environ.get("DB_PASSWORD", "") or os.environ.get("MYSQL_PWD", "")
-    if not db_password:
-        cfg_path = Path(__file__).parent / "config.yaml"
-        if cfg_path.exists():
-            try:
-                import yaml
-                with open(cfg_path) as f:
-                    cfg = yaml.safe_load(f)
-                db_cfg = cfg.get("database", {})
-                host = db_cfg.get("host", "127.0.0.1")
-                user = db_cfg.get("user", "root")
-                database = db_cfg.get("database", "ai_jobs_db")
-                db_password = db_cfg.get("password", "")
-            except Exception:
-                return
-        else:
-            return
+def skill_report(gap: dict, jobs: list) -> str:
+    lines = ["# AI Agent 技能差距分析报告 · %s\n" % DATE_STR]
+    lines.append("> 基于 BOSS 直聘 %d 个岗位 JD 分析\n---\n" % gap["total"])
 
-    if not db_password:
-        return
+    lines.append("## 一、✅ 你已拥有的技能\n")
+    for item in gap["have"]:
+        bar = "■" * min(item["count"] // 2 + 1, 20)
+        lines.append("- **%s**: %s (%d个岗位要求)" % (item["skill"], bar, item["count"]))
+    lines.append("")
 
+    lines.append("## 二、🔍 需要查漏补缺\n")
+    for item in gap["missing"][:30]:
+        bar = "■" * min(item["count"] // 2 + 1, 20)
+        p = "🔴" if item["count"] >= 10 else "🟡" if item["count"] >= 5 else "🟢"
+        lines.append("- %s **%s**: %s (%d个岗位要求)" % (p, item["skill"], bar, item["count"]))
+        if item["examples"]:
+            e = item["examples"][0]
+            lines.append("  - 例如: %s @ %s (%s)" % (e["title"], e["company"], e["salary"]))
+    lines.append("")
+
+    lines.append("## 三、📊 技能分类统计\n")
+    cc = Counter()
     for j in jobs:
-        title = j["title"].replace("'", "\\'")
-        company = (j.get("company") or "").replace("'", "\\'")
-        salary = j["salary"].replace("'", "\\'")
-        desc = (j.get("description") or "")[:300].replace("'", "\\'")
-        sql = f"""INSERT IGNORE INTO job_requirements 
-(collected_date,title,company,salary,requirement_text)
-VALUES ('{TODAY}','{title}','{company}','{salary}','{desc}');"""
-        os.system(
-            f'mysql -h {host} -u {user} -p\'{db_password}\' {database} -e "{sql}" 2>/dev/null'
-        )
-    print(f"💾 已存 MySQL")
+        text = (j.get("description") or "") + " " + (j.get("title") or "")
+        seen = set()
+        for cat in parse_skills(text):
+            if cat not in seen:
+                seen.add(cat)
+                cc[cat] += 1
+    for cat, n in cc.most_common():
+        pct = n * 100 // len(jobs)
+        lines.append("- %s: %s %d/%d (%d%%)" % (cat, "█" * min(pct // 3, 30), n, len(jobs), pct))
+
+    lines.append("\n---\n## 📋 完整岗位列表\n")
+    for i, j in enumerate(jobs, 1):
+        lines.append("### %d. %s" % (i, j["title"]))
+        lines.append("- 公司: %s" % (j.get("company") or "未显示"))
+        lines.append("- 薪资: %s" % j["salary"])
+        desc = j.get("description", "")
+        if desc:
+            lines.append("\n**岗位要求：**\n```\n%s\n```" % desc[:500])
+        lines.append("\n---\n")
+    lines.append("\n*数据采集于 %s*\n" % DATE_STR)
+    return "\n".join(lines)
 
 
-# ============================================================
-# 主流程
-# ============================================================
+def save_links(jobs: list, path: Path):
+    with open(path, "w") as f:
+        for j in jobs:
+            if j.get("href"):
+                f.write("%s | %s | %s\n" % (j["title"], j["salary"], j["href"]))
+
+
+# ══════════════════════════════════════════════
+#  主流程
+# ══════════════════════════════════════════════
+
 def main():
-    parser = argparse.ArgumentParser(description="BOSS直聘 AI Agent 岗位采集 + 技能分析")
-    parser.add_argument("--login", action="store_true", help="首次扫码登录")
-    parser.add_argument("--headless", action="store_true", default=False)
-    parser.add_argument("--keywords", help="关键词逗号分隔")
-    parser.add_argument("--salary-min", type=int, default=SALARY_MIN)
-    parser.add_argument("--salary-max", type=int, default=SALARY_MAX)
-    parser.add_argument("--output", default=str(OUTPUT_DIR))
-    parser.add_argument("--no-db", action="store_true")
-    parser.add_argument("--quick", action="store_true", help="仅列表页，不爬详情")
-    parser.add_argument("--max-jobs", type=int, default=64, help="最多采集岗位数")
-    parser.add_argument("--max-detail", type=int, default=0, help="最多爬详情页数（0=不爬详情）")
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(description="BOSS直聘 AI Agent 岗位采集")
+    ap.add_argument("--login", action="store_true")
+    ap.add_argument("--headless", action="store_true", default=False)
+    ap.add_argument("--keywords")
+    ap.add_argument("--output", default=str(OUTPUT_DIR))
+    ap.add_argument("--no-db", action="store_true")
+    ap.add_argument("--max-jobs", type=int, default=64)
+    args = ap.parse_args()
 
-    salary_min = args.salary_min
-    salary_max = args.salary_max
-
-    keywords = [k.strip() for k in args.keywords.split(",")] if args.keywords else DEFAULT_KEYWORDS
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
+    keywords = [k.strip() for k in args.keywords.split(",")] if args.keywords else DEFAULT_KEYWORDS
 
     if not STATE_FILE.exists() and not args.login:
-        print("⚠️ 未检测到登录状态，请先运行: python3 boss_firefox.py --login")
+        print("⚠️ 请先运行: python3 boss_firefox.py --login")
         sys.exit(1)
 
-    scraper = BossFirefoxScraper(headless=args.headless)
-    scraper.start()
-
+    sc = BossScraper(headless=args.headless)
+    sc.start()
     try:
         if args.login:
-            scraper.login()
-            print("✅ 登录完成")
+            sc.login()
             return
 
         all_jobs = []
-        seen_titles = set()
+        seen = set()
 
-        # Phase 1: 搜索所有关键词，获取列表
         for kw in keywords:
-            print(f"\n📌 搜索: 「{kw}」")
+            print("\n📌 搜索: 「%s」" % kw)
             try:
-                links = scraper.get_listing_links(kw)
+                jobs = sc.search(kw)
             except Exception as e:
-                print(f"  ⚠️ 失败: {e}")
+                print("  ⚠️ 失败: %s" % e)
                 continue
 
-            # 过滤薪资
-            filtered = []
-            for link in links:
-                name = link.get("title", "")
-                salary_raw = link.get("salary", "")
-                salary = decode_boss_salary(salary_raw) if salary_raw else ""
-                if not salary or not salary_ok(salary):
+            valid = []
+            for j in jobs:
+                if not salary_in_range(j["salary"]):
                     continue
-                key = name + salary
-                if key not in seen_titles:
-                    seen_titles.add(key)
-                    filtered.append(link)
+                key = j["title"] + j["salary"]
+                if key not in seen:
+                    seen.add(key)
+                    valid.append(j)
 
-            print(f"  📋 找到 {len(links)} 条，薪资过滤后 {len(filtered)} 条（累计 {len(all_jobs)}）")
-
-            all_jobs.extend([{
-                "title": link["title"],
-                "salary": link.get("salary", ""),
-                "company": link.get("company", ""),
-                "experience": link.get("experience", ""),
-                "education": link.get("education", ""),
-                "city": link.get("city", ""),
-                "description": "",
-                "tags": [],
-                "keyword": kw,
-                "url": link.get("href", ""),
-            } for link in filtered])
-
+            print("  📋 %d条，过滤后%d条（累计%d）" % (len(jobs), len(valid), len(all_jobs)))
+            all_jobs.extend(valid)
             if len(all_jobs) >= args.max_jobs:
-                print(f"  📊 已达上限 {args.max_jobs} 条")
+                print("  📊 已达上限%d条" % args.max_jobs)
                 break
+            human_pause(2, 4)
 
-            human_delay(2, 4)
-
-        print(f"\n📊 共获取 {len(all_jobs)} 条岗位")
-
+        print("\n📊 共%d条" % len(all_jobs))
         if not all_jobs:
-            print("❌ 没有符合条件的岗位")
             return
 
-        # Phase 2: 爬取详情页 JD（除非 --quick）
-        if not args.quick:
-            print("\n🔍 开始爬取岗位详情（模拟人工浏览，每页停留 3-5 秒）...")
-            detail_count = 0
-            detail_limit = min(args.max_detail, len(all_jobs))
+        # 链接文件
+        links_path = out_dir / "岗位链接_%s.txt" % DATE_STR
+        save_links(all_jobs, links_path)
+        print("🔗 链接: %s (%d条)" % (links_path, sum(1 for j in all_jobs if j.get("href"))))
 
-            for i, job in enumerate(all_jobs):
-                if detail_count >= detail_limit:
-                    break
-                if not job.get("url"):
-                    continue
-
-                try:
-                    print(f"  [{detail_count+1}/{detail_limit}] {job['title'][:25]:25s}", end=" ", flush=True)
-                    detail = scraper.fetch_jd_detail(job["url"])
-                    
-                    # 用详情页薪资重新过滤
-                    detail_salary = detail.get("salary", "") or job["salary"]
-                    if not salary_ok(detail_salary):
-                        print(f"⏭️ 薪资 {detail_salary} 不在范围内")
-                        continue
-                    
-                    job["title"] = detail["title"] or job["title"]
-                    job["salary"] = detail_salary
-                    job["company"] = detail["company"]
-                    job["description"] = detail["description"]
-                    job["tags"] = detail.get("tags", [])
-
-                    # 从 description 中提取经验和学历
-                    desc = job["description"]
-                    if desc:
-                        exp_match = re.search(r"(\d+[-~]\d+年|\d+年以上|经验不限|应届)", desc)
-                        if exp_match:
-                            job["experience"] = exp_match.group(1)
-                        edu_match = re.search(r"(本科|硕士|博士|大专|学历不限)", desc)
-                        if edu_match:
-                            job["education"] = edu_match.group(1)
-
-                    skills = parse_jd_skills(desc)
-                    skill_tags = []
-                    for cat, items in skills.items():
-                        skill_tags.extend(items)
-                    print(f"✅ {', '.join(skill_tags[:5])}")
-                    detail_count += 1
-
-                except Exception as e:
-                    print(f"⚠️ {e}")
-
-                # 每爬3个详情页休息一下（模拟真实浏览）
-                if detail_count % 3 == 0:
-                    print(f"  💤 休息 {random.uniform(2, 4):.0f} 秒...")
-                    human_delay(2, 4)
-
-        # 输出
-        print(f"\n{'='*60}")
-        print(f"📊 共采集 {len(all_jobs)} 条，其中 {sum(1 for j in all_jobs if j.get('url'))} 条有详情链接")
-
-        # 保存详情页链接
-        links_path = out_dir / f"岗位链接_{DATE_STR}.txt"
-        with open(links_path, "w") as f:
-            for j in all_jobs:
-                if j.get("url"):
-                    f.write("%s | %s | %s\n" % (j['title'], j['salary'], j['url']))
-        print(f"🔗 链接文件: {links_path} ({sum(1 for j in all_jobs if j.get('url'))} 条)")
-
-        # 技能分析
-        gap = analyze_skill_gap(all_jobs)
-
-        print(f"\n{'='*60}")
+        # 分析
+        gap = skill_gap(all_jobs)
+        print("\n" + "=" * 60)
         print("📊 技能差距分析")
-        print(f"{'='*60}")
-        print(f"\n✅ 你已有的技能（市场需求验证）:")
-        for item in sorted(gap["have"], key=lambda x: -x["count"])[:10]:
-            print(f"  - {item['skill']}: {item['count']}个岗位要求")
+        print("=" * 60)
+        print("\n✅ 已有:")
+        for item in gap["have"][:10]:
+            print("  - %s: %d个岗位" % (item["skill"], item["count"]))
+        print("\n🔍 需要补:")
+        for item in gap["missing"][:15]:
+            p = "🔴" if item["count"] >= 10 else "🟡" if item["count"] >= 5 else "🟢"
+            print("  %s %s: %d个岗位" % (p, item["skill"], item["count"]))
 
-        print(f"\n🔍 需要查漏补缺:")
-        for item in sorted(gap["missing"], key=lambda x: -x["count"])[:15]:
-            priority = "🔴" if item["count"] >= 10 else "🟡" if item["count"] >= 5 else "🟢"
-            print(f"  {priority} {item['skill']}: {item['count']}个岗位要求")
-
-        # 生成报告
-        skill_report = render_skill_report(gap, all_jobs)
-        skill_path = out_dir / f"技能分析报告_{DATE_STR}.md"
-        with open(skill_path, "w") as f:
-            f.write(skill_report)
-        print(f"\n📄 技能分析报告: {skill_path}")
-
-        # 生成日报
-        if not args.quick:
-            daily_report = render_daily_report(all_jobs)
-            daily_path = out_dir / f"招聘日报_{DATE_STR}.md"
-            with open(daily_path, "w") as f:
-                f.write(daily_report)
-            print(f"📄 招聘日报: {daily_path}")
-
-        # JSONL
-        jsonl_path = out_dir / f"招聘日报_{DATE_STR}.jsonl"
-        with open(jsonl_path, "w") as f:
+        # 输出文件
+        with open(out_dir / "技能分析报告_%s.md" % DATE_STR, "w") as f:
+            f.write(skill_report(gap, all_jobs))
+        with open(out_dir / "招聘日报_%s.md" % DATE_STR, "w") as f:
+            f.write(daily_report(all_jobs))
+        with open(out_dir / "招聘日报_%s.jsonl" % DATE_STR, "w") as f:
             for j in all_jobs:
-                clean = {k: v for k, v in j.items() if not k.startswith("_")}
-                f.write(json.dumps(clean, ensure_ascii=False) + "\n")
-        print(f"📄 JSONL: {jsonl_path}")
+                f.write(json.dumps({k: v for k, v in j.items() if not k.startswith("_")},
+                                   ensure_ascii=False) + "\n")
+        print("📄 日报: %s/招聘日报_%s.md" % (out_dir, DATE_STR))
 
         # MySQL
         if not args.no_db:
-            save_to_mysql(all_jobs)
+            pw = os.environ.get("DB_PASSWORD") or os.environ.get("MYSQL_PWD", "")
+            if pw:
+                import yaml
+                cfg_path = Path(__file__).parent / "config.yaml"
+                if cfg_path.exists():
+                    with open(cfg_path) as f:
+                        cfg = yaml.safe_load(f)
+                    db = cfg.get("database", {})
+                    host = db.get("host", "127.0.0.1")
+                    user = db.get("user", "root")
+                    dbname = db.get("database", "ai_jobs_db")
+                    for j in all_jobs:
+                        sql = ("INSERT IGNORE INTO job_requirements "
+                               "(collected_date,title,company,salary,requirement_text) VALUES "
+                               "('%s','%s','%s','%s','%s');" % (
+                                   TODAY,
+                                   j["title"].replace("'", "\\'"),
+                                   (j.get("company") or "").replace("'", "\\'"),
+                                   j["salary"].replace("'", "\\'"),
+                                   (j.get("description") or "")[:300].replace("'", "\\'")))
+                        os.system("mysql -h %s -u %s -p'%s' %s -e \"%s\" 2>/dev/null"
+                                  % (host, user, pw, dbname, sql))
+                    print("💾 已存 MySQL")
 
-        print(f"\n✅ 全部完成！")
+        print("\n✅ 完成！")
 
     finally:
-        scraper.close()
+        sc.close()
 
 
 if __name__ == "__main__":
