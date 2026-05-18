@@ -541,15 +541,16 @@ def render_daily_report(jobs: list) -> str:
         lines.append("\n---\n")
 
     for i, j in enumerate(jobs, 1):
-        lines.append("### %d. %s" % (i, j['title']))
+        lines.append("### %d. %s %s" % (i, j['title'], j['salary']))
         lines.append("- 公司: %s" % (j.get('company', '未显示')))
-        lines.append("- 薪资: %s" % j['salary'])
         if j.get("city"):
             lines.append("- 城市: %s" % j['city'])
         if j.get("experience"):
             lines.append("- 经验: %s" % j['experience'])
         if j.get("education"):
             lines.append("- 学历: %s" % j['education'])
+        if j.get("url"):
+            lines.append("- 链接: %s" % j['url'])
         desc = j.get("description", "") or ""
         if desc:
             tags_list = []
@@ -559,7 +560,7 @@ def render_daily_report(jobs: list) -> str:
                 tags_str = " ".join("`%s`" % t for t in tags_list[:12])
                 lines.append("- 技能: %s" % tags_str)
             lines.append("")
-            lines.append(desc[:800])
+            lines.append(desc[:1200])
             lines.append("")
         else:
             title = j.get("title", "")
@@ -627,7 +628,7 @@ def main():
     parser.add_argument("--no-db", action="store_true")
     parser.add_argument("--quick", action="store_true", help="仅列表页，不爬详情")
     parser.add_argument("--max-jobs", type=int, default=64, help="最多采集岗位数")
-    parser.add_argument("--max-detail", type=int, default=64, help="最多爬详情页数（默认全部爬）")
+    parser.add_argument("--max-detail", type=int, default=0, help="最多爬详情页数（0=不爬详情，默认不爬）")
     args = parser.parse_args()
 
     salary_min = args.salary_min
@@ -757,7 +758,15 @@ def main():
 
         # 输出
         print(f"\n{'='*60}")
-        print(f"📊 共采集 {len(all_jobs)} 条，爬取详情 {sum(1 for j in all_jobs if j.get('description'))} 条")
+        print(f"📊 共采集 {len(all_jobs)} 条，其中 {sum(1 for j in all_jobs if j.get('url'))} 条有详情链接")
+
+        # 保存详情页链接
+        links_path = out_dir / f"岗位链接_{DATE_STR}.txt"
+        with open(links_path, "w") as f:
+            for j in all_jobs:
+                if j.get("url"):
+                    f.write("%s | %s | %s\n" % (j['title'], j['salary'], j['url']))
+        print(f"🔗 链接文件: {links_path} ({sum(1 for j in all_jobs if j.get('url'))} 条)")
 
         # 技能分析
         gap = analyze_skill_gap(all_jobs)
