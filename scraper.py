@@ -121,8 +121,8 @@ def load_config():
 # 智联招聘 爬虫
 # ============================================================
 
-def scrape_zhaopin(keyword="AI应用开发", max_jobs=30):
-    """去智联招聘搜岗位，返回列表"""
+def scrape_zhaopin(keyword="AI应用开发", max_jobs=50):
+    """去智联招聘搜岗位，返回列表（多页）"""
     all_jobs = []
     
     try:
@@ -136,38 +136,46 @@ def scrape_zhaopin(keyword="AI应用开发", max_jobs=30):
             page = context.new_page()
             
             kw = urllib.parse.quote(keyword)
-            url = f"https://sou.zhaopin.com/?jl=489&kw={kw}&p=1"
             
-            page.goto(url, wait_until="networkidle", timeout=20000)
-            page.wait_for_timeout(3000)
-            
-            html = page.content()
-            soup = BeautifulSoup(html, "html.parser")
-            
-            # 选岗位卡片
-            cards = []
-            for sel in [
-                "div[class*='joblist-box'] div[class*='item']",
-                "div[class*='positionlist'] div[class*='item']",
-                "div[class*='job-card']",
-                "li[class*='job']",
-            ]:
-                cards = soup.select(sel)
-                if cards and len(cards) > 1:
+            # 爬多页
+            for page_num in range(1, 4):  # 第1-3页
+                if len(all_jobs) >= max_jobs:
                     break
-            
-            if cards and len(cards) > 1:
-                for card in cards[:max_jobs]:
-                    try:
-                        job = _parse_card(card)
-                        if job and job["title"]:
-                            if job.get("detail_url"):
-                                jd = _fetch_jd_detail(job["detail_url"])
-                                if jd:
-                                    job["requirements"] = jd
-                            all_jobs.append(job)
-                    except:
-                        continue
+                url = f"https://sou.zhaopin.com/?jl=489&kw={kw}&p={page_num}"
+                
+                page.goto(url, wait_until="networkidle", timeout=20000)
+                page.wait_for_timeout(3000)
+                
+                html = page.content()
+                soup = BeautifulSoup(html, "html.parser")
+                
+                # 选岗位卡片
+                cards = []
+                for sel in [
+                    "div[class*='joblist-box'] div[class*='item']",
+                    "div[class*='positionlist'] div[class*='item']",
+                    "div[class*='job-card']",
+                    "li[class*='job']",
+                ]:
+                    cards = soup.select(sel)
+                    if cards and len(cards) > 1:
+                        break
+                
+                if cards and len(cards) > 1:
+                    for card in cards[:max_jobs]:
+                        try:
+                            job = _parse_card(card)
+                            if job and job["title"]:
+                                if job.get("detail_url"):
+                                    jd = _fetch_jd_detail(job["detail_url"])
+                                    if jd:
+                                        job["requirements"] = jd
+                                all_jobs.append(job)
+                        except:
+                            continue
+                    print(f"  [智联] 关键词'{keyword}' 第{page_num}页: {len(cards)}个")
+                else:
+                    print(f"  [智联] 关键词'{keyword}' 第{page_num}页: 没有找到岗位卡片")
             
             context.close()
             browser.close()
@@ -469,7 +477,7 @@ def main():
     for kw in kw_list:
         jobs = scrape_zhaopin(kw)
         all_jobs.extend(jobs)
-        if len(all_jobs) >= 30:
+        if len(all_jobs) >= 100:
             break
     
     # 去重
@@ -500,7 +508,7 @@ def main():
                 seen_f.add(k)
                 filtered.append(j)
     
-    filtered = filtered[:15]
+    filtered = filtered[:100]
     
     if not filtered:
         print("一条都没捞到，可能是网站改版了或者关键词没匹配上")
