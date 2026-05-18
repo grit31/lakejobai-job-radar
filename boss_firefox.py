@@ -604,7 +604,7 @@ def main():
     parser.add_argument("--no-db", action="store_true")
     parser.add_argument("--quick", action="store_true", help="仅列表页，不爬详情")
     parser.add_argument("--max-jobs", type=int, default=64, help="最多采集岗位数")
-    parser.add_argument("--max-detail", type=int, default=0, help="每关键词最多爬详情数（0=不爬详情，2=每词爬2个）")
+    parser.add_argument("--max-detail", type=int, default=5, help="每关键词最多爬详情数（0=不爬详情）")
     args = parser.parse_args()
 
     salary_min = args.salary_min
@@ -693,8 +693,15 @@ def main():
                 try:
                     print(f"  [{detail_count+1}/{detail_limit}] {job['title'][:25]:25s}", end=" ", flush=True)
                     detail = scraper.fetch_jd_detail(job["url"])
+                    
+                    # 用详情页薪资重新过滤
+                    detail_salary = detail.get("salary", "") or job["salary"]
+                    if not salary_ok(detail_salary):
+                        print(f"⏭️ 薪资 {detail_salary} 不在范围内")
+                        continue
+                    
                     job["title"] = detail["title"] or job["title"]
-                    job["salary"] = detail["salary"] or job["salary"]
+                    job["salary"] = detail_salary
                     job["company"] = detail["company"]
                     job["description"] = detail["description"]
                     job["tags"] = detail.get("tags", [])
