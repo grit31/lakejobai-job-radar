@@ -364,16 +364,9 @@ def main():
                 print("⚠️ 无技能描述")
             time.sleep(random.uniform(1.5, 3.0))
 
-        print("\n📊 技能采集: %d/%d条成功" % (success, len(all_jobs)))
+        print("📊 技能采集: %d/%d条成功" % (success, len(all_jobs)))
 
-        # 链接文件
-        with open(out_dir / ("岗位链接_%s.txt" % DATE_STR), "w") as f:
-            for j in all_jobs:
-                if j.get("url"):
-                    f.write("%s | %s | %s\n" % (j["title"], j["salary"], j["url"]))
-        print("🔗 链接: %s/岗位链接_%s.txt" % (out_dir, DATE_STR))
-
-        # 分析
+        # 分析输出到终端即可
         gap = skill_gap(all_jobs)
         print("\n" + "="*60)
         print("📊 技能差距分析")
@@ -384,14 +377,9 @@ def main():
             p = "🔴" if item["count"]>=10 else "🟡" if item["count"]>=5 else "🟢"
             print("  %s %s: %d个岗位" % (p, item["skill"], item["count"]))
 
-        # 输出
-        with open(out_dir / ("技能分析报告_%s.md" % DATE_STR), "w") as f:
-            f.write(skill_report(gap))
+        # 输出——只保留招聘日报
         with open(out_dir / ("招聘日报_%s.md" % DATE_STR), "w") as f:
             f.write(output_report(all_jobs))
-        with open(out_dir / ("招聘日报_%s.jsonl" % DATE_STR), "w") as f:
-            for j in all_jobs:
-                f.write(json.dumps(j, ensure_ascii=False)+"\n")
         print("📄 日报: %s/招聘日报_%s.md" % (out_dir, DATE_STR))
         print("\n✅ 完成！")
 
