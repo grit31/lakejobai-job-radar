@@ -568,12 +568,12 @@ def add_to_shortlist(
 ) -> int:
     db = get_db()
     try:
-        db.execute(
+        cur = db.execute(
             "INSERT INTO shortlists (job_url, job_title, company, salary, city, note) VALUES (?,?,?,?,?,?)",
             (job_url, title, company, salary, city, note),
         )
         db.commit()
-        return db.lastrowid
+        return cur.lastrowid
     except sqlite3.IntegrityError:
         return 0
 
