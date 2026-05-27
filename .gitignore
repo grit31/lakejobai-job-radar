@@ -1,6 +1,6 @@
+.boss_profile/
 __pycache__/
 *.pyc
-reports/
 .env
-config.local.yaml
-.boss_profile/
+**/.env
+.DS_Store

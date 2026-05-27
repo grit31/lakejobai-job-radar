@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem interview *)",
+      "Bash(Get-ChildItem *)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('boss_state.py', doraise=True\\); print\\('boss_state.py OK'\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('boss_replier.py', doraise=True\\); print\\('boss_replier.py OK'\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('boss_automation.py', doraise=True\\); print\\('boss_automation.py OK'\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('boss_app.py', doraise=True\\); print\\('boss_app.py OK'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"from boss_app import app; print\\('boss_app imported OK, routes:', len\\(app.routes\\)\\)\")",
+      "Bash(python -c \"import fastapi; print\\('fastapi:', fastapi.__version__\\)\")",
+      "Bash(python -c \"import starlette; print\\('starlette:', starlette.__version__\\)\")",
+      "Bash(pip install *)",
+      "Bash(python -c \"from boss_app import app; print\\('boss_app OK, routes:', len\\(app.routes\\)\\)\")",
+      "Bash(Test-Path *)",
+      "Bash(python boss_app.py --port 8000)",
+      "Bash(timeout 3)",
+      "Bash(curl -s http://127.0.0.1:8000/api/health)",
+      "Bash(python -c \"from playwright.sync_api import sync_playwright; p=sync_playwright\\(\\).start\\(\\); print\\(p.firefox.executable_path\\)\")",
+      "Bash(netstat -ano)",
+      "Bash(taskkill //F //IM python.exe)",
+      "Bash(cmd //c \"taskkill /F /IM python.exe 2>nul\")",
+      "Bash(python *)",
+      "WebSearch",
+      "WebFetch(domain:www.zhipin.com)",
+      "Bash(taskkill //F //IM firefox.exe)",
+      "Bash(cmd.exe /c \"taskkill /F /IM python.exe & taskkill /F /IM firefox.exe\")",
+      "Bash(cmd.exe *)",
+      "Bash(fuser .boss_profile/boss_state.db)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(echo \"done $?\")",
+      "Bash(/c/Windows/System32/netstat.exe -ano)",
+      "Bash(/c/Windows/System32/taskkill.exe /F /PID 56948)"
+    ]
+  }
+}
