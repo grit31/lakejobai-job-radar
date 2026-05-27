@@ -584,34 +584,6 @@ td a:hover{color:var(--accent);}
         </div>
       </div>
     </div>
-      <div class="glass-card"><h3>频率限制</h3>
-        <div class="setting-row"><label>每日投递上限</label><input type="number" id="setDailyLimit" value="15" min="1" max="30"></div>
-        <div class="setting-row"><label>回复间隔(秒)</label><div style="display:flex;gap:8px;flex:1;"><input type="number" id="setMinDelay" value="30" min="10" max="300" style="flex:1;"><span style="color:var(--text-3);line-height:36px;">至</span><input type="number" id="setMaxDelay" value="120" min="20" max="600" style="flex:1;"></div></div>
-      </div>
-      <div class="glass-card"><h3>个人资料</h3>
-        <div class="setting-row"><label>微信号</label><input type="text" id="setWechat" placeholder="AI会引导HR添加"></div>
-        <div class="setting-row"><label>简历摘要</label><textarea id="setResume" placeholder="技能、项目经验...">AI应用开发工程师，熟练Python/LangChain/RAG/Agent开发，有MCP、AutoGen等框架实战经验，做过多个企业级AI应用落地项目。</textarea></div>
-      </div>
-      <div class="glass-card"><h3>搜索关键词</h3>
-        <div class="setting-row"><label>关键词（一行一个）</label><textarea id="setSearchKeywords" rows="5" placeholder="AI Agent&#10;大模型开发&#10;AI产品经理&#10;RAG开发" style="min-height:80px;"></textarea></div>
-      </div>
-      <div class="glass-card"><h3>AI模型配置</h3>
-        <div class="setting-row"><label>平台</label><select id="setAIPlatform" onchange="onPlatformChange()"><option value="">-- 选择平台 --</option><option value="deepseek">DeepSeek</option><option value="openrouter">OpenRouter</option><option value="mimo">小米MiMo</option><option value="custom">自定义</option></select></div>
-        <div class="setting-row"><label>API Key</label><input type="password" id="setAIApiKey" placeholder="输入API Key"><span id="aiKeyStatus" style="font-size:11px;line-height:36px;margin-left:4px;"></span></div>
-        <div class="setting-row"><label>Base URL</label><input type="text" id="setAIBaseUrl" placeholder="自动填充"></div>
-        <div class="setting-row"><label>模型</label><select id="setAIModel"><option value="">-- 选择模型 --</option></select></div>
-        <div class="setting-row"><label>自动回复</label><select id="setAutoReply"><option value="true">开启</option><option value="false">关闭</option></select></div>
-        <div style="font-size:11px;color:var(--text-3);margin-top:8px;">选择平台后自动填充Base URL和可选模型列表</div>
-      </div>
-      <div class="glass-card"><h3>系统控制</h3>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn btn-primary" onclick="saveSettings()">保存设置</button>
-          <button class="btn btn-secondary btn-sm" onclick="doRelogin()">重新扫码登录</button>
-          <button class="btn btn-secondary btn-sm" onclick="manualHeartbeat()">心跳保活</button>
-          <span id="sessionStatus" style="font-size:11px;color:var(--text-3);line-height:28px;"></span>
-        </div>
-      </div>
-    </div>
   </main>
 </div>
 
