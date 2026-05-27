@@ -2,17 +2,18 @@
 
 # lakejobai-job-radar
 
-**AI 驱动的 BOSS 直聘智能求职助手 · Web 控制台版**
+**AI 驱动的 BOSS 直聘智能求职助手 · Web 控制台 + CLI**
 
-> 自动搜索 · 批量投递 · AI 聊天 · 微信/简历/手机号交换 · 多模型支持
+> 自动搜索 · 批量投递 · AI 聊天 · 福利筛选 · 候选池 · Web + CLI 双模式
 
 [![Python](https://img.shields.io/badge/Python-≥3.10-3776AB?logo=python&logoColor=white&style=flat-square)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
+[![CLI](https://img.shields.io/badge/CLI-14_Commands-blue.svg?style=flat-square)](#-cli-命令)
 [![GitHub Release](https://img.shields.io/github/v/release/longnull-ck/lakejobai-job-radar?style=flat-square)](https://github.com/longnull-ck/lakejobai-job-radar/releases)
 [![Contributors](https://img.shields.io/github/contributors/longnull-ck/lakejobai-job-radar?style=flat-square)](https://github.com/longnull-ck/lakejobai-job-radar/graphs/contributors)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](https://github.com/longnull-ck/lakejobai-job-radar/pulls)
 
-[快速开始](#-快速开始) · [安装](#-安装) · [核心能力](#-核心能力) · [AI 模型配置](#-ai-模型配置) · [命令参考](#-api-端点参考) · [诊断排障](#-诊断与排障) · [架构](#-技术架构) · [免责声明](#️-免责声明)
+[快速开始](#-快速开始) · [安装](#-安装) · [核心能力](#-核心能力) · [CLI 命令](#-cli-命令) · [AI 模型配置](#-ai-模型配置) · [API 端点](#-api-端点参考) · [诊断排障](#-诊断与排障) · [架构](#-技术架构) · [免责声明](#️-免责声明)
 
 </div>
 
@@ -161,31 +162,82 @@ Web 控制台设置页中选择平台后自动填充 Base URL 和可选模型。
 
 ---
 
+## 💻 CLI 命令
+
+安装后即可使用 `lakejob` 命令，所有输出为结构化 JSON，AI Agent 友好。
+
+### 安装 CLI
+
+```bash
+pip install -e .          # 开发模式安装
+# 或
+pip install lakejobai-job-radar
+```
+
+### 14 条命令
+
+```bash
+lakejob search "AI Agent" --city 广州 --welfare "双休,五险一金"
+lakejob status              # 浏览器状态 + 今日统计
+lakejob stats               # 投递转化漏斗
+lakejob jobs --status pending  # 待投递岗位列表
+lakejob apply <job_url>     # 投递单个
+lakejob apply-batch         # 批量投递待投递
+lakejob conversations       # HR 会话列表
+lakejob chat <conv_id>      # 查看聊天记录
+lakejob send <conv_id> --msg "你好"  # 手动发消息
+lakejob analyze <job_url>   # AI 分析岗位匹配度
+lakejob shortlist list|add|remove  # 本地候选池
+lakejob schema              # 输出工具描述 JSON（给 AI Agent 看）
+lakejob doctor              # 环境诊断
+lakejob server --start|--stop  # 管理后台服务
+```
+
+### 输出格式
+
+```json
+{
+  "ok": true,
+  "command": "search",
+  "data": [...],
+  "pagination": { "page": 1, "has_more": true, "total": 15 },
+  "error": null,
+  "hints": { "next_actions": ["lakejob apply <url>"] }
+}
+```
+
+### AI Agent 集成
+
+```
+# AI Agent 先获取工具列表
+$ lakejob schema
+# 解析后可调用任意命令，stdout 仅输出 JSON
+$ lakejob search "Golang" --city 北京
+{"ok": true, "command": "search", "data": [...]}
+```
+
+---
+
 ## 📁 项目结构
 
 ```
 lakejobai-job-radar/
-├── boss_app.py              # FastAPI Web 后端（923行）
-├── boss_automation.py       # 自动化投递 & 聊天交互（1256行）
-├── boss_firefox.py          # BOSS 直聘搜索采集（748行）
-├── boss_replier.py          # AI 回复生成 & DeepSeek/OpenAI API
+├── boss_app.py              # FastAPI Web 后端
+├── boss_automation.py       # 自动化投递 & 聊天交互
+├── boss_firefox.py          # BOSS 直聘搜索采集
+├── boss_replier.py          # AI 回复生成
 ├── boss_state.py            # SQLite 数据持久化
-├── boss_daily.py            # 日报生成
-├── scraper.py               # 智联招聘爬虫
-├── config.yaml              # 本地配置（浏览器/登录）
-├── requirements.txt         # Python 依赖
-├── setup.sh                 # 安装脚本
+├── pyproject.toml           # Python 打包 + CLI 入口
+├── lakejob_cli/             # CLI 模块
+│   ├── cli.py               # 14 条 Click 命令
+│   ├── client.py            # HTTP 客户端
+│   ├── output.py            # JSON 信封格式化
+│   └── schema.json          # AI Agent 工具描述
 ├── static/
 │   └── dashboard.html       # Web 控制台前端（单文件 SPA）
 ├── reports/                 # 搜索日报输出目录
 ├── interview/               # 面试问答 Agent 子模块
-│   ├── main.py              # 独立 FastAPI 服务
-│   ├── engine.py            # 面试引擎
-│   ├── fast_qa.py           # 快速检索
-│   ├── llm_client.py        # LLM API 客户端
-│   ├── db.py                # MySQL 数据库层
-│   └── static/              # 面试页面前端
-└── .boss_profile/           # Firefox 浏览器 Profile（不提交 Git）
+└── .boss_profile/           # Firefox 浏览器 Profile（不提交）
 ```
 
 ---
