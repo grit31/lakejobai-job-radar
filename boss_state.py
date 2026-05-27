@@ -115,6 +115,19 @@ def init_db():
         db.execute("ALTER TABLE conversations ADD COLUMN phone_shared INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
         pass
+    # 候选池表
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS shortlists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_url TEXT UNIQUE NOT NULL,
+            job_title TEXT NOT NULL,
+            company TEXT,
+            salary TEXT,
+            city TEXT,
+            note TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
     # 默认设置
     defaults = {
         "greeting_template": "您好！看到贵司在招{job_title}，很感兴趣。PS：正在和你聊天的这个AI工具是我自己开发的——就当是我的技术名片了",
@@ -545,6 +558,39 @@ def get_today_auto_reply_count() -> int:
         .fetchone()
     )
     return row["cnt"] if row else 0
+
+
+# ═══════════════════════
+#  候选池
+# ═══════════════════════
+def add_to_shortlist(
+    job_url: str, title: str, company: str = "", salary: str = "", city: str = "", note: str = ""
+) -> int:
+    db = get_db()
+    try:
+        db.execute(
+            "INSERT INTO shortlists (job_url, job_title, company, salary, city, note) VALUES (?,?,?,?,?,?)",
+            (job_url, title, company, salary, city, note),
+        )
+        db.commit()
+        return db.lastrowid
+    except sqlite3.IntegrityError:
+        return 0
+
+
+def remove_from_shortlist(shortlist_id: int):
+    get_db().execute("DELETE FROM shortlists WHERE id=?", (shortlist_id,))
+    get_db().commit()
+
+
+def list_shortlists(limit: int = 100) -> list:
+    rows = get_db().execute("SELECT * FROM shortlists ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+    return _rows_to_list(rows)
+
+
+def is_in_shortlist(job_url: str) -> bool:
+    row = get_db().execute("SELECT COUNT(*) as cnt FROM shortlists WHERE job_url=?", (job_url,)).fetchone()
+    return row["cnt"] > 0 if row else False
 
 
 # 启动时初始化

@@ -71,3 +71,18 @@ def relogin():
 
 def analyze(job_url: str, title: str = "", company: str = "", desc: str = ""):
     return _post("/api/jobs/analyze", {"job_url": job_url, "job_title": title, "company": company, "description": desc})
+
+
+def get_shortlists():
+    return _get("/api/shortlists")
+
+
+def add_shortlist(job_url: str, title: str = "", company: str = "", salary: str = "", city: str = ""):
+    return _post(
+        "/api/shortlists", {"job_url": job_url, "title": title, "company": company, "salary": salary, "city": city}
+    )
+
+
+def remove_shortlist(sid: int):
+    resp = httpx.delete(f"{BASE_URL}/api/shortlists/{sid}", timeout=30)
+    return resp

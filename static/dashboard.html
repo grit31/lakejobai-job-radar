@@ -283,6 +283,7 @@
         <button class="btn btn-sm btn-secondary" onclick="loadApplications('pending')">待投递</button>
         <button class="btn btn-sm btn-secondary" onclick="loadApplications('applied')">已投递</button>
         <button class="btn btn-sm btn-secondary" onclick="loadApplications('replied')">已回复</button>
+        <button class="btn btn-sm btn-secondary" onclick="loadShortlists()">收藏</button>
         <button class="btn btn-sm btn-primary" onclick="batchApplyPending()">一键投递待投递</button>
       </div>
       <div id="applyProgress"></div>
@@ -726,6 +727,7 @@ function renderJobs(jobs, emptyText) {
       actions += `<button class="btn btn-sm btn-secondary" data-action="skip" data-id="${attr(j.id)}">跳过</button>`;
     }
     actions += `<button class="btn btn-sm btn-secondary" onclick="analyzeJob('${attr(j.job_url)}','${attr(titleText)}','${attr(j.company||'')}','${attr((j.description||'').slice(0,500))}')">AI分析</button>`;
+    actions += `<button class="btn btn-sm btn-secondary" onclick="toggleShortlist('${attr(j.job_url)}','${attr(titleText)}','${attr(j.company||'')}','${attr(j.salary||'')}','${attr(j.city||'')}',this)">⭐收藏</button>`;
     html += `<div class="job-card">
       <div class="title">${title}</div>
       <div class="meta">
@@ -823,6 +825,23 @@ function analyzeJob(url, title, company, desc) {
     `;
   }).catch(e => {
     document.getElementById('analyzeResult').innerHTML = `<div style="color:var(--red);">分析失败: ${e.message}</div>`;
+  });
+}
+
+// ── 收藏切换 ──
+function toggleShortlist(url, title, company, salary, city, btn) {
+  fetch('/api/shortlists', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({job_url: url, title, company, salary, city})
+  }).then(r => r.json()).then(d => {
+    if (d.status === 'already_exists' || d.status === 'duplicate') {
+      btn.textContent = '已收藏';
+      btn.style.opacity = '0.5';
+    } else {
+      btn.textContent = '⭐已收藏';
+      btn.style.opacity = '1';
+    }
   });
 }
 
@@ -1044,6 +1063,35 @@ function onPlatformChange() {
   } else {
     sel.innerHTML += '<option value="">自定义模型名称</option>';
   }
+}
+
+// ── Shortlists ──
+function loadShortlists() {
+  fetch('/api/shortlists').then(r => r.json()).then(d => {
+    const tbody = document.getElementById('appTableBody');
+    const sl = d.shortlists || [];
+    if (!sl.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无收藏岗位</td></tr>';
+      return;
+    }
+    tbody.innerHTML = sl.map(s => `<tr>
+      <td><a href="${attr(s.job_url)}" target="_blank">${esc(s.job_title)}</a></td>
+      <td>${esc(s.company||'')}</td>
+      <td>${esc(s.salary||'')}</td>
+      <td>${esc(s.city||'')}</td>
+      <td><span class="badge badge-pending">收藏</span></td>
+      <td>
+        <button class="btn btn-sm btn-secondary" onclick="removeShortlist(${s.id},this)">取消收藏</button>
+        <button class="btn btn-sm btn-primary" onclick="applyOne('${attr(s.job_url)}',this)">投递</button>
+      </td>
+    </tr>`).join('');
+  });
+}
+
+function removeShortlist(id, btn) {
+  fetch('/api/shortlists/' + id, { method:'DELETE' }).then(r => r.json()).then(() => {
+    loadShortlists();
+  });
 }
 
 // ── Settings ──

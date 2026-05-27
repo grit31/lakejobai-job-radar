@@ -153,6 +153,31 @@ def analyze_cmd(job_url, title, company, desc):
     output.emit(output.ok_or_fail(resp, "analyze"))
 
 
+# ── 候选池 ──
+@main.command("shortlist")
+@click.argument("action", type=click.Choice(["list", "add", "remove"]))
+@click.option("--job-url", help="岗位URL")
+@click.option("--title", default="", help="岗位名称")
+@click.option("--company", default="", help="公司名")
+@click.option("--id", "sid", type=int, help="shortlist ID")
+def shortlist_cmd(action, job_url, title, company, sid):
+    if action == "list":
+        resp = client.get_shortlists()
+        output.emit(output.ok_or_fail(resp, "shortlist"))
+    elif action == "add":
+        if not job_url:
+            output.emit(output.fail("shortlist", "--job-url required"))
+            return
+        resp = client.add_shortlist(job_url, title, company)
+        output.emit(output.ok_or_fail(resp, "shortlist"))
+    elif action == "remove":
+        if not sid:
+            output.emit(output.fail("shortlist", "--id required"))
+            return
+        resp = client.remove_shortlist(sid)
+        output.emit(output.ok_or_fail(resp, "shortlist"))
+
+
 # ── 服务管理 ──
 @main.command("server")
 @click.option("--start", is_flag=True, help="启动后台服务")

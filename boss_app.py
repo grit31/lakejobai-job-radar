@@ -49,6 +49,10 @@ from boss_state import (
     get_today_pending_count,
     count_hours_replied_in_range,
     count_interest_level,
+    add_to_shortlist,
+    remove_from_shortlist,
+    list_shortlists,
+    is_in_shortlist,
 )
 from boss_replier import generate_greeting
 
@@ -747,6 +751,42 @@ async def analyze_jd(req: AnalyzeRequest):
         return json.loads(raw.strip().strip("`").strip("json").strip())
     except Exception as e:
         return {"error": f"AI分析失败: {e}", "match_score": 0, "summary": "请检查AI配置"}
+
+
+# ══════════════════════════════════════
+#  候选池
+# ══════════════════════════════════════
+
+
+@app.get("/api/shortlists")
+def get_shortlists():
+    return {"shortlists": list_shortlists()}
+
+
+@app.post("/api/shortlists")
+def add_shortlist(req: dict = {}):
+    url = req.get("job_url", "")
+    if not url:
+        raise HTTPException(status_code=400, detail="缺少 job_url")
+    if is_in_shortlist(url):
+        return {"status": "already_exists"}
+    sid = add_to_shortlist(
+        url,
+        req.get("title", ""),
+        req.get("company", ""),
+        req.get("salary", ""),
+        req.get("city", ""),
+        req.get("note", ""),
+    )
+    if sid:
+        return {"status": "ok", "id": sid}
+    return {"status": "duplicate"}
+
+
+@app.delete("/api/shortlists/{sid}")
+def remove_shortlist(sid: int):
+    remove_from_shortlist(sid)
+    return {"status": "ok"}
 
 
 # ══════════════════════════════════════
