@@ -257,6 +257,7 @@
           <option value="全国">全国</option>
         </select>
         <button class="btn btn-primary" id="btnSearch" onclick="doSearch()">搜索</button>
+        <input type="text" id="searchWelfare" placeholder="福利 如:双休,五险一金" style="max-width:180px;">
         <button class="btn btn-success" onclick="batchSearch()">一键搜索全部</button>
         <button class="btn btn-primary" onclick="batchApplyAll()">一键投递待投递</button>
       </div>
@@ -636,7 +637,8 @@ function doSearch() {
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({
       keyword: document.getElementById('searchKeyword').value,
-      city: document.getElementById('searchCity').value
+      city: document.getElementById('searchCity').value,
+      welfare: document.getElementById('searchWelfare').value || undefined
     })
   }).then(r => r.json()).then(d => {
     searchInFlight = false;

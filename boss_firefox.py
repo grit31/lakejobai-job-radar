@@ -330,9 +330,7 @@ MY_SKILLS = {
 
 
 def decode_salary(text):
-    return "".join(
-        str(ord(c) - 0xE030) if 0xE030 <= ord(c) <= 0xE039 else c for c in text
-    )
+    return "".join(str(ord(c) - 0xE030) if 0xE030 <= ord(c) <= 0xE039 else c for c in text)
 
 
 def salary_ok(text):
@@ -551,9 +549,7 @@ class BossScraper:
 
         # 预热：导航到聊天页验证 session 稳定性，确保 token 生效
         try:
-            self.page.goto(
-                "https://www.zhipin.com/web/geek/chat", wait_until="load", timeout=30000
-            )
+            self.page.goto("https://www.zhipin.com/web/geek/chat", wait_until="load", timeout=30000)
             pause(3, 5)
             if not self._login_prompt_visible():
                 print("✅ 会话预热成功")
@@ -578,16 +574,10 @@ class BossScraper:
         if dom_jobs:
             return dom_jobs
 
-        lines = [
-            l.strip() for l in self.page.inner_text("body").split("\n") if l.strip()
-        ]
+        lines = [l.strip() for l in self.page.inner_text("body").split("\n") if l.strip()]
 
         # 薪资行定位
-        sal_idx = [
-            i
-            for i, l in enumerate(lines)
-            if re.search(r"\d+[-~]\d+K", decode_salary(l), re.I)
-        ]
+        sal_idx = [i for i, l in enumerate(lines) if re.search(r"\d+[-~]\d+K", decode_salary(l), re.I)]
 
         jobs = []
         for n, si in enumerate(sal_idx):
@@ -641,6 +631,19 @@ class BossScraper:
                 if not j["url"] and j["title"][:12] in lm:
                     j["url"] = lm[j["title"][:12]]
         return jobs
+
+    def _filter_by_welfare(self, jobs, welfare_keywords):
+        """福利筛选：AND逻辑，所有关键词都必须匹配。"""
+        if not welfare_keywords:
+            return jobs
+        filtered = []
+        for j in jobs:
+            tags = " ".join(j.get("welfareList", []) or [])
+            if not tags:
+                tags = j.get("description", "") or ""
+            if all(kw in tags for kw in welfare_keywords):
+                filtered.append(j)
+        return filtered
 
     def _extract_job_cards(self):
         """优先从岗位卡片 DOM 提取，避免正文行号变化导致链接和岗位错配。"""
@@ -870,9 +873,7 @@ def output_report(jobs):
         if j.get("education"):
             lines.append("- 学历: %s" % j["education"])
         if j.get("hr_name"):
-            lines.append(
-                "- 👤 招聘者: %s (%s)" % (j["hr_name"], j.get("hr_title") or "")
-            )
+            lines.append("- 👤 招聘者: %s (%s)" % (j["hr_name"], j.get("hr_title") or ""))
         if j.get("url"):
             lines.append("- 链接: %s" % j["url"])
         desc = j.get("description", "")
@@ -912,9 +913,7 @@ def main():
 
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
-    keywords = (
-        [k.strip() for k in args.keywords.split(",")] if args.keywords else KEYWORDS
-    )
+    keywords = [k.strip() for k in args.keywords.split(",")] if args.keywords else KEYWORDS
 
     if not STATE_FILE.exists() and not args.login:
         print("⚠️ 请先运行: python3 boss_firefox.py --login")
@@ -947,9 +946,7 @@ def main():
                         seen.add(key)
                         j["city"] = city_name  # 标记城市
                         ok.append(j)
-                print(
-                    "  %d条, 去重后%d条(累计%d)" % (len(jobs), len(ok), len(all_jobs))
-                )
+                print("  %d条, 去重后%d条(累计%d)" % (len(jobs), len(ok), len(all_jobs)))
                 all_jobs.extend(ok)
                 if len(all_jobs) >= args.max_jobs:
                     print("  📊 已达上限%d条" % args.max_jobs)
@@ -980,10 +977,7 @@ def main():
             j["hr_name"] = detail.get("hr_name", "")
             j["hr_title"] = detail.get("hr_title", "")
             if detail["description"]:
-                print(
-                    "✅ %d字 | HR: %s"
-                    % (len(detail["description"]), j["hr_name"] or "未识别")
-                )
+                print("✅ %d字 | HR: %s" % (len(detail["description"]), j["hr_name"] or "未识别"))
             else:
                 print("⚠️ 无描述 | HR: %s" % (j["hr_name"] or "未识别"))
             time.sleep(random.uniform(1.5, 3.0))

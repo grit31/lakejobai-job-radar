@@ -93,9 +93,7 @@ async def on_startup():
         ]
         for name in junk_names:
             db.execute("DELETE FROM conversations WHERE hr_name = ?", (name,))
-        db.execute(
-            "DELETE FROM conversations WHERE hr_name IS NULL OR length(hr_name) < 2"
-        )
+        db.execute("DELETE FROM conversations WHERE hr_name IS NULL OR length(hr_name) < 2")
         # 合并同名重复：保留最早的，把重复的改成 closed
         db.execute("""
             UPDATE conversations SET status = 'closed'
@@ -214,8 +212,7 @@ def _search_job_payload(job: dict, application: Optional[dict] = None) -> dict:
         "hr_name": application.get("hr_name") or job.get("hr_name", ""),
         "hr_title": application.get("hr_title") or job.get("hr_title", ""),
         "description": application.get("description") or job.get("description", ""),
-        "status": application.get("status")
-        or ("pending" if job.get("url") else "missing_url"),
+        "status": application.get("status") or ("pending" if job.get("url") else "missing_url"),
     }
 
 
@@ -245,6 +242,8 @@ def _clean_messages_for_web(messages: List[dict]) -> List[dict]:
 class SearchRequest(BaseModel):
     keyword: str = "AI Agent"
     city: str = "淄博"
+    welfare: Optional[str] = None  # 福利筛选 如 "双休,五险一金"
+    limit: int = 60
 
 
 class ApplyRequest(BaseModel):
@@ -307,9 +306,7 @@ def index():
     html_path = static_dir / "dashboard.html"
     if html_path.exists():
         return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
-    return HTMLResponse(
-        content="<h1>BOSS直聘自动化控制台</h1><p>dashboard.html 未找到</p>"
-    )
+    return HTMLResponse(content="<h1>BOSS直聘自动化控制台</h1><p>dashboard.html 未找到</p>")
 
 
 # ══════════════════════════════════════
@@ -567,9 +564,7 @@ def list_jobs(status: Optional[str] = None, limit: int = 100):
 async def search_jobs(req: SearchRequest):
     global monitor_paused
     if not automation or automation.page is None:
-        raise HTTPException(
-            status_code=503, detail="浏览器未启动，请先到设置Tab点击「启动浏览器」"
-        )
+        raise HTTPException(status_code=503, detail="浏览器未启动，请先到设置Tab点击「启动浏览器」")
     was_paused = monitor_paused
     monitor_paused = True
     try:
@@ -578,6 +573,11 @@ async def search_jobs(req: SearchRequest):
             jobs = await _run_pw(automation.search, req.keyword, city_code)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"搜索失败: {e}")
+
+        # 福利筛选
+        if req.welfare:
+            welfare_kw = [w.strip() for w in req.welfare.split(",") if w.strip()]
+            jobs = automation._filter_by_welfare(jobs, welfare_kw)
 
         saved_ids = []
         result_jobs = []
@@ -744,9 +744,7 @@ async def sync_conversation_messages(conv_id: int):
 
     try:
         async with browser_sync_lock:
-            opened = await asyncio.wait_for(
-                _run_pw(automation.open_conversation_by_name, hr_name), timeout=8
-            )
+            opened = await asyncio.wait_for(_run_pw(automation.open_conversation_by_name, hr_name), timeout=8)
             if not opened:
                 return {
                     "success": False,
@@ -754,15 +752,11 @@ async def sync_conversation_messages(conv_id: int):
                     "messages": _clean_messages_for_web(get_messages(conv_id, 100)),
                 }
 
-            live_messages = await asyncio.wait_for(
-                _run_pw(automation.read_visible_messages), timeout=5
-            )
+            live_messages = await asyncio.wait_for(_run_pw(automation.read_visible_messages), timeout=5)
             if live_messages:
                 replace_conversation_messages(conv_id, live_messages)
                 last = live_messages[-1]
-                update_conversation_last_message(
-                    conv_id, last.get("content", ""), last.get("sender", "hr")
-                )
+                update_conversation_last_message(conv_id, last.get("content", ""), last.get("sender", "hr"))
     except asyncio.TimeoutError:
         return {
             "success": False,
@@ -790,15 +784,11 @@ async def send_manual_message(conv_id: int, req: SendMessageRequest):
     # 先打开对应会话
     opened = await _run_pw(automation.open_conversation_by_name, hr_name)
     if not opened:
-        raise HTTPException(
-            status_code=500, detail=f"无法在浏览器中打开 {hr_name} 的会话"
-        )
+        raise HTTPException(status_code=500, detail=f"无法在浏览器中打开 {hr_name} 的会话")
 
     browser_ok = await _run_pw(automation.send_message, req.content, False)
     if not browser_ok:
-        raise HTTPException(
-            status_code=500, detail="浏览器发送失败，本地不会写入这条消息"
-        )
+        raise HTTPException(status_code=500, detail="浏览器发送失败，本地不会写入这条消息")
 
     add_message(conv_id, "me", req.content, ai_generated=False)
     update_conversation_last_message(conv_id, req.content, "me")
@@ -900,8 +890,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "type": "connected",
                 "status": {
                     "browser_running": automation is not None,
-                    "monitor_running": monitor_task is not None
-                    and not monitor_task.done(),
+                    "monitor_running": monitor_task is not None and not monitor_task.done(),
                 },
             }
         )
@@ -939,11 +928,7 @@ async def chat_monitor_loop():
         sys.path.insert(0, str(Path(__file__).parent / "interview"))
         from llm_client import DEEPSEEK_API_KEY
 
-        if (
-            DEEPSEEK_API_KEY
-            and "..." not in DEEPSEEK_API_KEY
-            and len(DEEPSEEK_API_KEY) > 20
-        ):
+        if DEEPSEEK_API_KEY and "..." not in DEEPSEEK_API_KEY and len(DEEPSEEK_API_KEY) > 20:
             print(f"[监控] AI API 已配置，自动回复就绪")
         else:
             print("[监控] ⚠️ AI API Key 未配置，请在前端设置页配置")
@@ -970,9 +955,7 @@ async def chat_monitor_loop():
         try:
             min_delay = int(get_setting("min_reply_delay_sec", "15"))
             max_delay = int(get_setting("max_reply_delay_sec", "20"))
-            delay = random.randint(
-                min(min_delay, max_delay), max(min_delay, max_delay) + 5
-            )
+            delay = random.randint(min(min_delay, max_delay), max(min_delay, max_delay) + 5)
             await asyncio.sleep(delay)
 
             if monitor_paused:
@@ -1061,9 +1044,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument(
-        "--auto-start", action="store_true", help="启动时自动打开浏览器"
-    )
+    parser.add_argument("--auto-start", action="store_true", help="启动时自动打开浏览器")
     args = parser.parse_args()
 
     if args.auto_start:
