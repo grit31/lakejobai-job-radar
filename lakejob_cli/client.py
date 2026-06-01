@@ -22,8 +22,8 @@ def _get(path: str, timeout=30):
     return resp
 
 
-def search(keyword: str, city: str, limit: int = 60):
-    return _post("/api/jobs/search", {"keyword": keyword, "city": city, "limit": limit})
+def search(keyword: str, city: str = "", limit: int = 60):
+    return _post("/api/jobs/search", {"keyword": keyword, "city": city or "", "limit": limit})
 
 
 def status():
@@ -47,6 +47,14 @@ def apply_one(job_url: str):
 
 def apply_batch(job_urls: list):
     return _post("/api/jobs/apply-batch", {"job_urls": job_urls})
+
+
+def scan():
+    return _post("/api/jobs/scan", timeout=120)
+
+
+def scan_and_apply():
+    return _post("/api/jobs/scan-and-apply", timeout=300)
 
 
 def conversations():

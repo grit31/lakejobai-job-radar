@@ -248,8 +248,8 @@ def _clean_messages_for_web(messages: List[dict]) -> List[dict]:
 
 class SearchRequest(BaseModel):
     keyword: str = "AI Agent"
-    city: str = "淄博"
-    welfare: Optional[str] = None  # 福利筛选 如 "双休,五险一金"
+    city: str = ""
+    welfare: Optional[str] = None
     limit: int = 60
 
 
@@ -260,6 +260,10 @@ class ApplyRequest(BaseModel):
 
 class ApplyBatchRequest(BaseModel):
     job_urls: List[str]
+    greeting: Optional[str] = None
+
+
+class ScanAndApplyRequest(BaseModel):
     greeting: Optional[str] = None
 
 
@@ -287,6 +291,7 @@ class SettingsUpdate(BaseModel):
     resume_summary: Optional[str] = None
     wechat_id: Optional[str] = None
     search_keywords: Optional[str] = None  # 逗号分隔的搜索关键词
+    default_city: Optional[str] = None  # 默认搜索城市
     selector_overrides: Optional[str] = None  # JSON 格式的选择器覆盖
     ai_api_key: Optional[str] = None  # AI API Key
     ai_base_url: Optional[str] = None  # AI Base URL
@@ -333,7 +338,7 @@ def get_status():
     browser_ok = automation is not None and automation.page is not None
     return {
         "browser_running": browser_ok,
-        "auto_reply_enabled": get_setting("auto_reply_enabled", "true") == "true",
+        "auto_reply_enabled": get_setting("auto_reply_enabled", "false") == "true",
         "monitor_running": monitor_task is not None and not monitor_task.done(),
         "monitor_paused": monitor_paused,
         "today_applications": get_today_application_count(),
@@ -624,7 +629,7 @@ async def search_jobs(req: SearchRequest):
     was_paused = monitor_paused
     monitor_paused = True
     try:
-        city_code = CITY_MAP.get(req.city, "100010000")
+        city_code = CITY_MAP.get(req.city or get_setting("default_city", "全国"), "100010000")
         try:
             jobs = await _run_pw(automation.search, req.keyword, city_code)
         except Exception as e:
@@ -736,6 +741,68 @@ async def apply_batch(req: ApplyBatchRequest):
         }
     )
     return {"results": results}
+
+
+@app.post("/api/jobs/scan")
+async def scan_current_page():
+    """扫描当前BOSS搜索结果页面，提取所有可见岗位，保存到数据库并返回。"""
+    if not automation or automation.page is None:
+        raise HTTPException(status_code=503, detail="浏览器未启动，请先到设置Tab点击「启动浏览器」")
+
+    try:
+        jobs = await _run_pw(automation.scan_current_page)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"扫描失败: {e}")
+
+    saved_ids = []
+    result_jobs = []
+    for j in jobs:
+        j["url"] = _normalize_job_url(j.get("url", ""))
+        if j.get("url"):
+            existing = get_application_by_url(j["url"])
+            if existing:
+                updated = update_application_from_job(existing["id"], j) or existing
+                saved_ids.append(updated["id"])
+                result_jobs.append(_search_job_payload(j, updated))
+            else:
+                aid = add_application(j)
+                if aid:
+                    saved_ids.append(aid)
+                    result_jobs.append(_search_job_payload(j, get_application(aid)))
+                else:
+                    result_jobs.append(_search_job_payload(j))
+        else:
+            result_jobs.append(_search_job_payload(j))
+
+    await broadcast_ws(
+        {
+            "type": "scan_complete",
+            "found": len(jobs),
+            "saved": len(saved_ids),
+        }
+    )
+    return {"jobs_found": len(jobs), "saved": len(saved_ids), "jobs": result_jobs}
+
+
+@app.post("/api/jobs/scan-and-apply")
+async def scan_and_apply(req: ScanAndApplyRequest = ScanAndApplyRequest()):
+    """扫描当前页面全部岗位 → 一键批量投递。"""
+    if not automation:
+        raise HTTPException(status_code=503, detail="浏览器未启动")
+
+    daily_limit = int(get_setting("daily_apply_limit", "15"))
+    if get_today_application_count() >= daily_limit:
+        raise HTTPException(status_code=429, detail="已达到今日投递上限")
+
+    result = await _run_pw(automation.scan_and_apply_current_page, req.greeting)
+    await broadcast_ws(
+        {
+            "type": "scan_apply_complete",
+            "scanned": result.get("scanned", 0),
+            "applied": result.get("applied", 0),
+        }
+    )
+    return result
 
 
 @app.post("/api/jobs/analyze")
@@ -1144,7 +1211,7 @@ async def chat_monitor_loop():
             if _heartbeat_count >= 1:
                 await _run_pw(automation.keep_alive)
 
-            if get_setting("auto_reply_enabled", "true") != "true":
+            if get_setting("auto_reply_enabled", "false") != "true":
                 continue
 
             result = await _run_pw(automation.run_chat_monitor_cycle)

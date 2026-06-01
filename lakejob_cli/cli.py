@@ -33,12 +33,12 @@ def schema_cmd():
 # ── 搜索 ──
 @main.command("search")
 @click.argument("keyword")
-@click.option("--city", default="全国", help="城市名")
+@click.option("--city", default="", help="城市名（空则使用设置中的默认城市）")
 @click.option("--welfare", default=None, help="福利筛选 如 双休,五险一金")
 @click.option("--count", type=int, default=60, help="返回条数上限")
 def search_cmd(keyword, city, welfare, count):
     """搜索BOSS直聘岗位。"""
-    payload = {"keyword": keyword, "city": city, "limit": count}
+    payload = {"keyword": keyword, "city": city or "", "limit": count}
     if welfare:
         payload["welfare"] = welfare
     resp = client.search(keyword, city, count)
@@ -96,6 +96,24 @@ def apply_batch_cmd(filter_status):
         return
     resp = client.apply_batch(urls)
     result = output.ok_or_fail(resp, "apply-batch")
+    output.emit(result)
+
+
+# ── 扫描当前页面 ──
+@main.command("scan")
+def scan_cmd():
+    """扫描当前BOSS搜索结果页，提取所有可见岗位。"""
+    resp = client.scan()
+    result = output.ok_or_fail(resp, "scan")
+    output.emit(result)
+
+
+# ── 扫描并一键投递 ──
+@main.command("scan-apply")
+def scan_apply_cmd():
+    """扫描当前页面全部岗位并一键批量投递。"""
+    resp = client.scan_and_apply()
+    result = output.ok_or_fail(resp, "scan-apply")
     output.emit(result)
 
 

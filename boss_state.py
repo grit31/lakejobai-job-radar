@@ -134,7 +134,7 @@ def init_db():
         "greeting_enabled": "true",
         "ai_reply_style": "professional",
         "daily_apply_limit": "15",
-        "auto_reply_enabled": "true",
+        "auto_reply_enabled": "false",
         "min_reply_delay_sec": "15",
         "max_reply_delay_sec": "20",
         "batch_delay_min_sec": "30",
@@ -142,6 +142,7 @@ def init_db():
         "resume_summary": "",
         "wechat_id": "",
         "search_keywords": "AI Agent,大模型开发,AI产品经理,RAG开发,大模型应用",
+        "default_city": "淄博",
     }
     for k, v in defaults.items():
         db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))

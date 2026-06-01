@@ -941,6 +941,85 @@ class BossAutomation(BossScraper):
             return False
 
     # ══════════════════════════════════════
+    #  页面扫描 & 一键投递
+    # ══════════════════════════════════════
+
+    def scan_current_page(self) -> List[dict]:
+        """扫描当前BOSS搜索结果页，提取所有可见岗位卡片。不跳转，只读当前页。"""
+        print(f"  [扫描] 开始扫描当前页面...")
+        self._scroll_all()
+        jobs = self._extract_job_cards()
+        if not jobs:
+            lines = [l.strip() for l in self.page.inner_text("body").split("\n") if l.strip()]
+            sal_idx = [i for i, l in enumerate(lines) if re.search(r"\d+[-~]\d+K", decode_salary(l), re.I)]
+            for n, si in enumerate(sal_idx):
+                if n > 0 and si - sal_idx[n - 1] < 3:
+                    continue
+                if si == 0:
+                    continue
+                title = lines[si - 1]
+                if not (2 < len(title) < 60):
+                    continue
+                salary = decode_salary(lines[si])
+                company = exp = edu = city = ""
+                end = sal_idx[n + 1] if n + 1 < len(sal_idx) else min(si + 10, len(lines))
+                for j in range(si + 1, min(end, len(lines))):
+                    ln = lines[j]
+                    if "经验" in ln or "应届" in ln:
+                        exp = ln
+                    elif re.search(r"本科|硕士|博士|大专|学历不限", ln):
+                        edu = ln
+                    elif "·" in ln and len(ln) < 30:
+                        city = ln
+                    elif (
+                        not company
+                        and len(ln) > 2
+                        and len(ln) < 40
+                        and not re.search(r"年|学历|大专|本科|硕士|博士|不限|应届|·", ln)
+                    ):
+                        company = ln
+                jobs.append(
+                    {
+                        "title": title,
+                        "salary": salary,
+                        "company": company,
+                        "experience": exp,
+                        "education": edu,
+                        "city": city,
+                        "url": "",
+                        "description": "",
+                        "hr_name": "",
+                        "hr_title": "",
+                    }
+                )
+            links = self._extract_links()
+            if links:
+                lm = {l["title"][:12]: l["href"] for l in links if l["title"][:12]}
+                for j in jobs:
+                    if not j["url"] and j["title"][:12] in lm:
+                        j["url"] = lm[j["title"][:12]]
+        print(f"  [扫描] 从当前页面提取到 {len(jobs)} 个岗位")
+        return jobs
+
+    def scan_and_apply_current_page(self, greeting_template: Optional[str] = None) -> dict:
+        """扫描当前页面全部岗位 → 一键批量投递。"""
+        jobs = self.scan_current_page()
+        if not jobs:
+            return {"success": False, "message": "当前页面未找到任何岗位", "scanned": 0, "applied": 0}
+        urls = [j["url"] for j in jobs if j.get("url")]
+        if not urls:
+            return {"success": False, "message": "扫描到的岗位没有有效URL", "scanned": len(jobs), "applied": 0}
+        results = self.apply_batch(urls, greeting_template)
+        success_count = sum(1 for r in results if r.get("success"))
+        return {
+            "success": success_count > 0,
+            "message": f"扫描 {len(jobs)} 个岗位，投递 {success_count}/{len(urls)}",
+            "scanned": len(jobs),
+            "applied": success_count,
+            "results": results,
+        }
+
+    # ══════════════════════════════════════
     #  监控周期（供后台循环调用）
     # ══════════════════════════════════════
 
@@ -1213,7 +1292,7 @@ class BossAutomation(BossScraper):
                 result["new_messages"] += 1
 
             # 自动回复
-            auto_reply_enabled = get_setting("auto_reply_enabled", "true") == "true"
+            auto_reply_enabled = get_setting("auto_reply_enabled", "false") == "true"
             if unreplied_hr_msg and auto_reply_enabled:
                 today_replies = get_today_auto_reply_count()
                 if today_replies >= MAX_AUTO_REPLY_PER_DAY:
