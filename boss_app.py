@@ -737,7 +737,8 @@ async def apply_to_job(req: ApplyRequest):
         title = job["job_title"] if job else "相关岗位"
         company = job["company"] if job else "贵公司"
         style = get_setting("ai_reply_style", "professional")
-        greeting = generate_greeting(title, company, style=style)
+        template = get_setting("greeting_template", "")
+        greeting = generate_greeting(title, company, template=template, style=style)
 
     # 在后台线程运行（Playwright 是同步的）
     result = await _run_pw(automation.apply_to_job, req.job_url, greeting)

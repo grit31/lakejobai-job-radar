@@ -312,32 +312,51 @@ class BossAutomation(BossScraper):
             if not self.check_page_safety():
                 return {"success": False, "message": "安全检查未通过"}
 
-            # 检查是否已投递
-            if self._has_text("已沟通", "继续沟通"):
-                existing = get_application_by_url(job_url)
-                if existing and existing["status"] == "pending":
-                    update_application_status(existing["id"], "applied")
-                return {"success": True, "message": "已投递过", "already_applied": True}
-
-            # 查找"立即沟通"按钮
-            apply_btn = self._find_element(SELECTORS["apply_button"])
-            if not apply_btn:
-                try:
-                    apply_btn = self.page.locator("text=立即沟通").first
-                    if not apply_btn.is_visible():
+            already_applied = self._has_text("已沟通", "继续沟通")
+            if already_applied:
+                print("  ℹ️ 岗位已沟通过，继续进入聊天窗口发送招呼语")
+                continue_btn = self._find_element(
+                    [
+                        'button:has-text("继续沟通")',
+                        'a:has-text("继续沟通")',
+                        'span:has-text("继续沟通")',
+                        'button:has-text("已沟通")',
+                        'a:has-text("已沟通")',
+                    ],
+                    timeout_ms=3000,
+                )
+                if not continue_btn:
+                    for text_selector in ("text=继续沟通", "text=已沟通"):
+                        try:
+                            continue_btn = self.page.locator(text_selector).first
+                            if continue_btn.is_visible():
+                                break
+                            continue_btn = None
+                        except Exception:
+                            continue_btn = None
+                if continue_btn:
+                    self._safe_click(continue_btn)
+                    pause(2, 3)
+            else:
+                # 查找"立即沟通"按钮
+                apply_btn = self._find_element(SELECTORS["apply_button"])
+                if not apply_btn:
+                    try:
+                        apply_btn = self.page.locator("text=立即沟通").first
+                        if not apply_btn.is_visible():
+                            apply_btn = None
+                    except Exception:
                         apply_btn = None
-                except Exception:
-                    apply_btn = None
 
-            if not apply_btn:
-                return {"success": False, "message": "未找到投递按钮"}
+                if not apply_btn:
+                    return {"success": False, "message": "未找到投递按钮"}
 
-            self._safe_click(apply_btn)
-            pause(2, 3)
+                self._safe_click(apply_btn)
+                pause(2, 3)
 
-            # 检查限制消息
-            if self._has_text("已达上限", "沟通人数已用完", "今日次数已用完", "今日沟通次数已用完"):
-                return {"success": False, "message": "BOSS直聘今日沟通次数已用完"}
+                # 检查限制消息
+                if self._has_text("已达上限", "沟通人数已用完", "今日次数已用完", "今日沟通次数已用完"):
+                    return {"success": False, "message": "BOSS直聘今日沟通次数已用完"}
 
             # 等待聊天窗口加载
             chat_input = self._find_element(SELECTORS["chat_input"], timeout_ms=5000)
@@ -409,9 +428,26 @@ class BossAutomation(BossScraper):
             if hr_name and len(hr_name) >= 2:
                 get_or_create_conversation(app_id, hr_name, hr_company, job_title)
 
-            increment_daily_stat("applications_sent")
-            print(f"  ✅ 投递成功")
-            return {"success": True, "message": "投递成功", "application_id": app_id}
+            if not already_applied:
+                increment_daily_stat("applications_sent")
+
+            if already_applied and greeting_sent:
+                message = "已投递过，招呼语已发送"
+            elif already_applied:
+                message = "已投递过，但未发送招呼语"
+            elif greeting_sent:
+                message = "投递成功，招呼语已发送"
+            else:
+                message = "投递成功，但未发送招呼语"
+
+            print(f"  ✅ {message}")
+            return {
+                "success": True,
+                "message": message,
+                "application_id": app_id,
+                "already_applied": already_applied,
+                "greeting_sent": greeting_sent,
+            }
 
         except Exception as e:
             print(f"  ❌ 投递失败: {e}")
@@ -657,7 +693,49 @@ class BossAutomation(BossScraper):
             return False
 
     def send_message(self, text: str, fast: bool = True) -> bool:
-        """逐字模拟键盘输入 + Enter 发送，确保 BOSS 检测到输入事件。"""
+        """逐字模拟键盘输入，优先 Enter 发送，失败时点击发送按钮兜底。"""
+
+        def _draft_text() -> str:
+            try:
+                return (
+                    self.page.evaluate("""() => {
+                    const selectors = ['#chat-input', '[contenteditable="true"]', 'textarea', 'input'];
+                    for (const sel of selectors) {
+                        const el = document.querySelector(sel);
+                        if (!el) continue;
+                        const text = (el.innerText || el.value || el.textContent || '').trim();
+                        if (text) return text;
+                    }
+                    return '';
+                }""")
+                    or ""
+                )
+            except Exception:
+                return ""
+
+        def _sent_message_visible(check: str) -> bool:
+            try:
+                return bool(check and check in self.page.inner_text("body"))
+            except Exception:
+                return False
+
+        def _click_send_button() -> bool:
+            try:
+                send_btn = self._find_element(SELECTORS["chat_send_button"], timeout_ms=2000)
+                if send_btn:
+                    self._safe_click(send_btn)
+                    return True
+            except Exception:
+                pass
+            try:
+                send_btn = self.page.locator("text=发送").first
+                if send_btn.is_visible():
+                    send_btn.click()
+                    return True
+            except Exception:
+                pass
+            return False
+
         try:
             # 点击输入框激活
             try:
@@ -684,21 +762,26 @@ class BossAutomation(BossScraper):
             self.page.keyboard.type(text, delay=delay)
             pause(0.3, 0.6)
 
+            check = text[:8] if len(text) >= 8 else text[:4]
+
             # 按 Enter 发送
             self.page.keyboard.press("Enter")
             pause(0.5, 1)
-
-            # 验证：消息区出现了刚发的文本
-            body = self.page.inner_text("body")
-            check = text[:8] if len(text) >= 8 else text[:4]
-            if check in body:
+            if _sent_message_visible(check) and check not in _draft_text():
                 return True
+
+            # 有些页面不会用 Enter 发送，改点发送按钮
+            if _click_send_button():
+                pause(0.5, 1)
+                if check not in _draft_text():
+                    return True
 
             # 再试一次 Enter
             try:
                 self.page.keyboard.press("Enter")
                 pause(0.3, 0.5)
-                return True
+                if check not in _draft_text():
+                    return True
             except Exception:
                 pass
 
