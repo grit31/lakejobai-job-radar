@@ -475,6 +475,54 @@ class BossAutomation(BossScraper):
             print(f"  ❌ 投递失败: {e}")
             return {"success": False, "message": str(e)}
 
+    def continue_to_job_chat(self, job_url: str) -> dict:
+        """打开岗位对应的 BOSS 聊天窗口，不发送招呼语。"""
+        if not job_url:
+            return {"success": False, "message": "缺少岗位链接"}
+
+        print(f"  💬 继续沟通: {job_url[:60]}...")
+
+        try:
+            self.page.goto(job_url, wait_until="load", timeout=45000)
+            pause(1, 2)
+
+            if not self.check_page_safety():
+                return {"success": False, "message": "安全检查未通过"}
+
+            continue_btn = self._find_element(
+                [
+                    'button:has-text("继续沟通")',
+                    'a:has-text("继续沟通")',
+                    'span:has-text("继续沟通")',
+                    'button:has-text("已沟通")',
+                    'a:has-text("已沟通")',
+                    '[class*="btn-chat"]',
+                ],
+                timeout_ms=5000,
+            )
+            if not continue_btn:
+                for text_selector in ("text=继续沟通", "text=已沟通"):
+                    try:
+                        continue_btn = self.page.locator(text_selector).first
+                        if continue_btn.is_visible():
+                            break
+                        continue_btn = None
+                    except Exception:
+                        continue_btn = None
+
+            if not continue_btn:
+                chat_input = self._find_element(SELECTORS["chat_input"], timeout_ms=1500)
+                if chat_input:
+                    return {"success": True, "message": "已在聊天窗口"}
+                return {"success": False, "message": "未找到继续沟通入口"}
+
+            self._safe_click(continue_btn)
+            pause(2, 3)
+            return {"success": True, "message": "已打开继续沟通窗口"}
+        except Exception as e:
+            print(f"  ❌ 继续沟通失败: {e}")
+            return {"success": False, "message": str(e)}
+
     def apply_batch(self, job_urls: List[str], greeting_template: Optional[str] = None) -> List[dict]:
         """批量投递，带间隔延迟。可通过设置 batch_delay_sec 控制间隔。"""
         results = []

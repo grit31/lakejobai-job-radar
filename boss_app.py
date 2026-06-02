@@ -755,6 +755,14 @@ async def apply_to_job(req: ApplyRequest):
     return result
 
 
+@app.post("/api/jobs/continue")
+async def continue_job_chat(req: ApplyRequest):
+    if not automation:
+        raise HTTPException(status_code=503, detail="浏览器未启动")
+    result = await _run_pw(automation.continue_to_job_chat, req.job_url)
+    return result
+
+
 @app.post("/api/jobs/apply-batch")
 async def apply_batch(req: ApplyBatchRequest):
     if not automation:

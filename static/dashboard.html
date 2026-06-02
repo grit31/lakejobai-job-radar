@@ -295,6 +295,7 @@ document.querySelectorAll('#sideNav a').forEach(a=>a.addEventListener('click',()
 
 document.addEventListener('click',e=>{
   let b=e.target.closest('[data-action="apply"]');if(b){applyOne(b.dataset.url,b);return;}
+  b=e.target.closest('[data-action="continue"]');if(b){continueChat(b.dataset.url,b);return;}
   b=e.target.closest('[data-action="skip"]');if(b)skipJob(b.dataset.id);
 });
 connectWS();loadSettings();refreshStatus();
@@ -365,10 +366,19 @@ function loadJobs(){fetch('/api/jobs?limit=50').then(r=>r.json()).then(d=>{curre
 
 function companySizeOf(j){return j.company_size||j.companySize||j.company_scale||j.brand_scale||j.scale||j.size||'';}
 function financingOf(j){return j.financing||j.finance_stage||j.financing_stage||j.company_financing||j.brand_stage||'';}
+function hasGreetingSent(j){return !!(j.greeting_sent_at||j.greeting_text||j.greetingSentAt);}
 function profileTags(j){
   let size=companySizeOf(j),financing=financingOf(j);
   let tags=['规模: '+(size||'未显示'),'融资: '+(financing||'未显示')];
   return tags.map(t=>'<span class="profile-tag">'+esc(t)+'</span>').join('');
+}
+function primaryJobAction(j,cls){
+  let hasUrl=!!j.job_url,s=j.status||(hasUrl?'pending':'missing_url');
+  if(!hasUrl)return '';
+  if(s==='pending'||s==='failed')return '<button class="'+cls+'" data-action="apply" data-url="'+attr(j.job_url)+'">投递</button>';
+  if(s==='applied'&&hasGreetingSent(j))return '<button class="'+cls+'" data-action="continue" data-url="'+attr(j.job_url)+'">继续沟通</button>';
+  if(s==='applied')return '<button class="'+cls+'" data-action="apply" data-url="'+attr(j.job_url)+'">补发招呼</button>';
+  return '';
 }
 
 function renderJobs(jobs){
@@ -382,9 +392,8 @@ function renderJobs(jobs){
     let profile=profileTags(j);
     let title=hasUrl?'<a href="'+attr(j.job_url)+'" target="_blank" rel="noopener">'+esc(titleText)+'</a>':esc(titleText);
     let acts='';
-    let canApply=(s==='pending'||s==='failed')&&hasUrl;
-    let canResendGreeting=(s==='applied'&&hasUrl);
-    if(canApply||canResendGreeting)acts+='<button class="btn btn-xs btn-primary" data-action="apply" data-url="'+attr(j.job_url)+'">'+(canResendGreeting?'补发招呼':'投递')+'</button> ';
+    let primary=primaryJobAction(j,'btn btn-xs btn-primary');
+    if(primary)acts+=primary+' ';
     acts+='<button class="btn btn-xs btn-secondary" onclick="analyzeJob(\''+attr(j.job_url)+'\',\''+attr(titleText)+'\',\''+attr(companyText)+'\',\''+attr((j.description||'').slice(0,500))+'\')">分析</button> ';
     acts+='<button class="btn btn-xs btn-secondary" onclick="toggleShortlist(\''+attr(j.job_url)+'\',\''+attr(titleText)+'\',\''+attr(companyText)+'\',\''+attr(j.salary||'')+'\',\''+attr(j.city||'')+'\',\''+attr(companySizeOf(j))+'\',\''+attr(financingOf(j))+'\',this)">收藏</button>';
     return'<div class="job-card"><div class="title">'+title+'</div><div class="meta">'+(companyText?'<span class="company">'+esc(companyText)+'</span>':'')+profile+(j.salary?'<span class="salary">'+esc(j.salary)+'</span>':'')+(j.city?'<span>'+esc(j.city)+'</span>':'')+'<span class="badge '+sb[s]+'">'+sl[s]+'</span></div><div class="actions">'+acts+'</div></div>';
@@ -394,6 +403,7 @@ function renderJobs(jobs){
 
 function applyOne(url,btn){
   if(!url){alert('缺少链接');return;}
+  let oldText=btn?btn.textContent:'投递';
   if(btn){btn.disabled=true;btn.textContent='投递中...';}
   fetch('/api/jobs/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_url:url})}).then(r=>r.json()).then(d=>{
     if(d.success){
@@ -401,8 +411,15 @@ function applyOne(url,btn){
       if(currentSearchJobs.length){currentSearchJobs=currentSearchJobs.map(j=>j.job_url===url?{...j,status:'applied',id:d.application_id||j.id,greeting_sent_at:sentAt||j.greeting_sent_at,greeting_text:d.greeting_text||j.greeting_text,company_size:d.company_size||j.company_size,financing:d.financing||j.financing}:j);renderJobs(currentSearchJobs);}else loadJobs();
       refreshStatus();if(activeTab==='applications')loadApplications();
       if(d.greeting_sent===false)alert(d.message||'投递完成，但招呼语没有发送成功');
-    }else{alert(d.message||'失败');if(btn){btn.disabled=false;btn.textContent='投递';}}
-  }).catch(()=>{if(btn){btn.disabled=false;btn.textContent='投递';}});
+    }else{alert(d.message||'失败');if(btn){btn.disabled=false;btn.textContent=oldText;}}
+  }).catch(()=>{if(btn){btn.disabled=false;btn.textContent=oldText;}});
+}
+function continueChat(url,btn){
+  if(!url){alert('缺少链接');return;}
+  if(btn){btn.disabled=true;btn.textContent='打开中...';}
+  fetch('/api/jobs/continue',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_url:url})}).then(r=>r.json()).then(d=>{
+    if(!d.success)alert(d.message||'打开失败');
+  }).catch(e=>alert('失败: '+(e.message||'网络错误'))).finally(()=>{if(btn){btn.disabled=false;btn.textContent='继续沟通';}});
 }
 function skipJob(id){fetch('/api/jobs/'+id+'/skip',{method:'POST'}).then(()=>{if(currentSearchJobs.length){currentSearchJobs=currentSearchJobs.map(j=>String(j.id)===String(id)?{...j,status:'skipped'}:j);renderJobs(currentSearchJobs);}else loadJobs();if(activeTab==='applications')loadApplications();});}
 
@@ -431,7 +448,7 @@ function renderAppPage(){
   let page=appAllJobs.slice(start,start+APP_PAGE_SIZE);
   if(!total){tbody.innerHTML='<tr><td colspan="7" class="empty">暂无记录</td></tr>';document.getElementById('appPagination').innerHTML='';return;}
   let sl={pending:'待投递',applied:'已投递',replied:'已回复',skipped:'已跳过',failed:'失败'},sb={pending:'badge-pending',applied:'badge-applied',replied:'badge-replied',skipped:'badge-skipped',failed:'badge-failed'};
-  tbody.innerHTML=page.map(j=>{let s=j.status||'pending';return'<tr><td><a href="'+attr(j.job_url)+'" target="_blank">'+esc(j.job_title||j.title||'未知')+'</a></td><td>'+esc(j.company||'')+'</td><td>'+profileTags(j)+'</td><td>'+esc(j.salary||'')+'</td><td>'+esc(j.city||'')+'</td><td><span class="badge '+sb[s]+'">'+sl[s]+'</span></td><td>'+(j.job_url?'<button class="btn btn-sm btn-primary" onclick="applyOne(\''+attr(j.job_url)+'\',this)">投递</button>':'')+'</td></tr>';}).join('');
+  tbody.innerHTML=page.map(j=>{let s=j.status||'pending';return'<tr><td><a href="'+attr(j.job_url)+'" target="_blank">'+esc(j.job_title||j.title||'未知')+'</a></td><td>'+esc(j.company||'')+'</td><td>'+profileTags(j)+'</td><td>'+esc(j.salary||'')+'</td><td>'+esc(j.city||'')+'</td><td><span class="badge '+sb[s]+'">'+sl[s]+'</span></td><td>'+primaryJobAction(j,'btn btn-sm btn-primary')+'</td></tr>';}).join('');
   document.getElementById('appPagination').innerHTML='<button '+(appCurrentPage<=1?'disabled':'')+' onclick="appCurrentPage=1;renderAppPage()">«</button><button '+(appCurrentPage<=1?'disabled':'')+' onclick="appCurrentPage--;renderAppPage()">‹</button><span>'+(start+1)+'-'+Math.min(start+APP_PAGE_SIZE,total)+' / '+total+'</span><button '+(appCurrentPage>=totalPages?'disabled':'')+' onclick="appCurrentPage++;renderAppPage()">›</button><button '+(appCurrentPage>=totalPages?'disabled':'')+' onclick="appCurrentPage=totalPages;renderAppPage()">»</button>';
 }
 
