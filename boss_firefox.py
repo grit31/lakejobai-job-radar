@@ -349,9 +349,9 @@ def salary_ok(text):
     return 15 <= l and h <= 35
 
 
-COMPANY_SIZE_RE = re.compile(r"(?:少于)?\d+(?:-\d+|\+)?人(?:以上)?|10000人以上")
+COMPANY_SIZE_RE = re.compile(r"(?:少于)?\d+(?:-\d+|\+)?人(?:以上|以下)?|10000人以上|\d+人以下")
 FINANCING_RE = re.compile(
-    r"未融资|无需融资|不需要融资|融资未公开|天使轮|种子轮|Pre[-\s]?[A-Z]轮|[A-G]\+?轮|战略融资|已上市|上市公司|新三板|并购|IPO",
+    r"未融资|暂无融资|无需融资|不需要融资|融资未公开|融资未披露|未透露|天使轮|种子轮|Pre[-\s]?[A-Z]轮|[A-G]\+?轮|战略融资|已上市|上市公司|新三板|并购|IPO",
     re.I,
 )
 
@@ -752,16 +752,34 @@ class BossScraper:
                     if (/\\d+[-~]\\d+K/i.test(value)) return true;
                     if (value.includes('·') && value.length < 35) return true;
                     if (/经验|应届|在校|不限|本科|硕士|博士|大专|学历|中专|高中|天\\/周|元\\/天/.test(value)) return true;
-                    if (/(?:少于)?\\d+(?:-\\d+|\\+)?人(?:以上)?|10000人以上/.test(value)) return true;
-                    if (/未融资|无需融资|不需要融资|融资未公开|天使轮|种子轮|Pre[-\\s]?[A-Z]轮|[A-G]\\+?轮|战略融资|已上市|上市公司|新三板|并购|IPO/i.test(value)) return true;
+                    if (/(?:少于)?\\d+(?:-\\d+|\\+)?人(?:以上|以下)?|10000人以上|\\d+人以下/.test(value)) return true;
+                    if (/未融资|暂无融资|无需融资|不需要融资|融资未公开|融资未披露|未透露|天使轮|种子轮|Pre[-\\s]?[A-Z]轮|[A-G]\\+?轮|战略融资|已上市|上市公司|新三板|并购|IPO/i.test(value)) return true;
                     if (/搜索|筛选|职位|岗位|薪资|投递|沟通|收藏|分析|BOSS|登录|发布时间|最近活跃/i.test(value)) return true;
                     if (/五险|双休|周末|餐补|交通|年终奖|带薪|绩效|奖金|房补|补贴|保险|股票|节假日/.test(value)) return true;
                     return false;
                 };
                 const pickCompanyProfile = (root) => {
-                    const lines = linesOf(root);
-                    const sizePattern = /(?:少于)?\\d+(?:-\\d+|\\+)?人(?:以上)?|10000人以上/;
-                    const financingPattern = /未融资|无需融资|不需要融资|融资未公开|天使轮|种子轮|Pre[-\\s]?[A-Z]轮|[A-G]\\+?轮|战略融资|已上市|上市公司|新三板|并购|IPO/i;
+                    const profileLines = [];
+                    const profileSelectors = [
+                        '.company-tag-list', '.company-tags', '.company-info',
+                        '.job-card-right', '.brand-info', '[class*="company-tag"]',
+                        '[class*="company-info"]', '[class*="brand"]', '[class*="tag-list"]'
+                    ];
+                    for (const sel of profileSelectors) {
+                        for (const el of root.querySelectorAll(sel)) {
+                            profileLines.push(...linesOf(el));
+                        }
+                    }
+                    profileLines.push(...linesOf(root));
+                    let parent = root.parentElement;
+                    for (let i = 0; parent && i < 3; i++, parent = parent.parentElement) {
+                        if ((parent.innerText || '').length < 1200) {
+                            profileLines.push(...linesOf(parent));
+                        }
+                    }
+                    const lines = [...new Set(profileLines.map(clean).filter(Boolean))];
+                    const sizePattern = /(?:少于)?\\d+(?:-\\d+|\\+)?人(?:以上|以下)?|10000人以上|\\d+人以下/;
+                    const financingPattern = /未融资|暂无融资|无需融资|不需要融资|融资未公开|融资未披露|未透露|天使轮|种子轮|Pre[-\\s]?[A-Z]轮|[A-G]\\+?轮|战略融资|已上市|上市公司|新三板|并购|IPO/i;
                     let companySize = '';
                     let financing = '';
                     for (const line of lines) {

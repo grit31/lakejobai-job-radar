@@ -366,9 +366,8 @@ function loadJobs(){fetch('/api/jobs?limit=50').then(r=>r.json()).then(d=>{curre
 function companySizeOf(j){return j.company_size||j.companySize||j.company_scale||j.brand_scale||j.scale||j.size||'';}
 function financingOf(j){return j.financing||j.finance_stage||j.financing_stage||j.company_financing||j.brand_stage||'';}
 function profileTags(j){
-  let tags=[],size=companySizeOf(j),financing=financingOf(j);
-  if(size)tags.push(size);
-  if(financing)tags.push(financing);
+  let size=companySizeOf(j),financing=financingOf(j);
+  let tags=['规模: '+(size||'未显示'),'融资: '+(financing||'未显示')];
   return tags.map(t=>'<span class="profile-tag">'+esc(t)+'</span>').join('');
 }
 
@@ -383,7 +382,9 @@ function renderJobs(jobs){
     let profile=profileTags(j);
     let title=hasUrl?'<a href="'+attr(j.job_url)+'" target="_blank" rel="noopener">'+esc(titleText)+'</a>':esc(titleText);
     let acts='';
-    if((s==='pending'||s==='failed')&&hasUrl)acts+='<button class="btn btn-xs btn-primary" data-action="apply" data-url="'+attr(j.job_url)+'">投递</button> ';
+    let canApply=(s==='pending'||s==='failed')&&hasUrl;
+    let canResendGreeting=(s==='applied'&&hasUrl);
+    if(canApply||canResendGreeting)acts+='<button class="btn btn-xs btn-primary" data-action="apply" data-url="'+attr(j.job_url)+'">'+(canResendGreeting?'补发招呼':'投递')+'</button> ';
     acts+='<button class="btn btn-xs btn-secondary" onclick="analyzeJob(\''+attr(j.job_url)+'\',\''+attr(titleText)+'\',\''+attr(companyText)+'\',\''+attr((j.description||'').slice(0,500))+'\')">分析</button> ';
     acts+='<button class="btn btn-xs btn-secondary" onclick="toggleShortlist(\''+attr(j.job_url)+'\',\''+attr(titleText)+'\',\''+attr(companyText)+'\',\''+attr(j.salary||'')+'\',\''+attr(j.city||'')+'\',\''+attr(companySizeOf(j))+'\',\''+attr(financingOf(j))+'\',this)">收藏</button>';
     return'<div class="job-card"><div class="title">'+title+'</div><div class="meta">'+(companyText?'<span class="company">'+esc(companyText)+'</span>':'')+profile+(j.salary?'<span class="salary">'+esc(j.salary)+'</span>':'')+(j.city?'<span>'+esc(j.city)+'</span>':'')+'<span class="badge '+sb[s]+'">'+sl[s]+'</span></div><div class="actions">'+acts+'</div></div>';
@@ -396,8 +397,10 @@ function applyOne(url,btn){
   if(btn){btn.disabled=true;btn.textContent='投递中...';}
   fetch('/api/jobs/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_url:url})}).then(r=>r.json()).then(d=>{
     if(d.success){
-      if(currentSearchJobs.length){currentSearchJobs=currentSearchJobs.map(j=>j.job_url===url?{...j,status:'applied',id:d.application_id||j.id}:j);renderJobs(currentSearchJobs);}else loadJobs();
+      let sentAt=d.greeting_sent?new Date().toISOString():'';
+      if(currentSearchJobs.length){currentSearchJobs=currentSearchJobs.map(j=>j.job_url===url?{...j,status:'applied',id:d.application_id||j.id,greeting_sent_at:sentAt||j.greeting_sent_at,greeting_text:d.greeting_text||j.greeting_text,company_size:d.company_size||j.company_size,financing:d.financing||j.financing}:j);renderJobs(currentSearchJobs);}else loadJobs();
       refreshStatus();if(activeTab==='applications')loadApplications();
+      if(d.greeting_sent===false)alert(d.message||'投递完成，但招呼语没有发送成功');
     }else{alert(d.message||'失败');if(btn){btn.disabled=false;btn.textContent='投递';}}
   }).catch(()=>{if(btn){btn.disabled=false;btn.textContent='投递';}});
 }

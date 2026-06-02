@@ -16,6 +16,7 @@ from boss_state import (
     init_db,
     add_application,
     get_application_by_url,
+    update_application_from_job,
     update_application_status,
     get_setting,
     get_today_application_count,
@@ -312,6 +313,13 @@ class BossAutomation(BossScraper):
             if not self.check_page_safety():
                 return {"success": False, "message": "安全检查未通过"}
 
+            detail_profile = {"company_size": "", "financing": ""}
+            try:
+                detail_lines = [l.strip() for l in self.page.inner_text("body").split("\n") if l.strip()]
+                detail_profile = pick_company_profile_from_lines(detail_lines)
+            except Exception:
+                pass
+
             already_applied = self._has_text("已沟通", "继续沟通")
             if already_applied:
                 print("  ℹ️ 岗位已沟通过，继续进入聊天窗口发送招呼语")
@@ -367,7 +375,9 @@ class BossAutomation(BossScraper):
                 "您好，我对贵公司的{job_title}岗位很感兴趣，请问可以详细了解一下吗？",
             )
             greeting_sent = False
-            if chat_input and greeting_text:
+            if greeting_text:
+                if not chat_input:
+                    print("  ⚠️ 未直接找到聊天输入框，继续用发送函数兜底查找")
                 greeting_sent = self.send_message(greeting_text)
                 if greeting_sent:
                     print(f"  ✅ 招呼语已发送")
@@ -376,14 +386,23 @@ class BossAutomation(BossScraper):
 
             # 记录到 SQLite
             existing = get_application_by_url(job_url)
+            profile_job = {
+                "title": "",
+                "company": "",
+                "url": job_url,
+                "company_size": detail_profile.get("company_size", ""),
+                "financing": detail_profile.get("financing", ""),
+            }
             if existing:
+                if detail_profile.get("company_size") or detail_profile.get("financing"):
+                    existing = update_application_from_job(existing["id"], profile_job) or existing
                 if greeting_sent:
                     update_application_status(existing["id"], "applied", greeting_text)
                 else:
                     update_application_status(existing["id"], "applied")
                 app_id = existing["id"]
             else:
-                app_id = add_application({"title": "", "company": "", "url": job_url})
+                app_id = add_application(profile_job)
                 if greeting_sent:
                     update_application_status(app_id, "applied", greeting_text)
                 else:
@@ -447,6 +466,9 @@ class BossAutomation(BossScraper):
                 "application_id": app_id,
                 "already_applied": already_applied,
                 "greeting_sent": greeting_sent,
+                "greeting_text": greeting_text if greeting_sent else "",
+                "company_size": app_record.get("company_size", ""),
+                "financing": app_record.get("financing", ""),
             }
 
         except Exception as e:
@@ -693,21 +715,27 @@ class BossAutomation(BossScraper):
             return False
 
     def send_message(self, text: str, fast: bool = True) -> bool:
-        """逐字模拟键盘输入，优先 Enter 发送，失败时点击发送按钮兜底。"""
+        """逐字模拟键盘输入，确保输入框写入后再发送。"""
 
         def _draft_text() -> str:
             try:
                 return (
                     self.page.evaluate("""() => {
-                    const selectors = ['#chat-input', '[contenteditable="true"]', 'textarea', 'input'];
-                    for (const sel of selectors) {
-                        const el = document.querySelector(sel);
-                        if (!el) continue;
-                        const text = (el.innerText || el.value || el.textContent || '').trim();
-                        if (text) return text;
-                    }
-                    return '';
-                }""")
+                        const visible = el => {
+                            const r = el.getBoundingClientRect();
+                            const s = getComputedStyle(el);
+                            return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                        };
+                        const selectors = ['#chat-input', '[contenteditable="true"]', 'textarea', 'input', '[class*="chat-input"]'];
+                        for (const sel of selectors) {
+                            for (const el of document.querySelectorAll(sel)) {
+                                if (!visible(el)) continue;
+                                const text = (el.innerText || el.value || el.textContent || '').trim();
+                                if (text) return text;
+                            }
+                        }
+                        return '';
+                    }""")
                     or ""
                 )
             except Exception:
@@ -719,19 +747,100 @@ class BossAutomation(BossScraper):
             except Exception:
                 return False
 
+        def _write_chat_input(value: str) -> bool:
+            try:
+                result = self.page.evaluate(
+                    """(value) => {
+                        const visible = el => {
+                            const r = el.getBoundingClientRect();
+                            const s = getComputedStyle(el);
+                            return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                        };
+                        const selectors = ['#chat-input', '[contenteditable="true"]', 'textarea', 'input', '[class*="chat-input"]'];
+                        let target = null;
+                        for (const sel of selectors) {
+                            for (const el of document.querySelectorAll(sel)) {
+                                if (!visible(el)) continue;
+                                if (el.matches('input, textarea') || el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
+                                    target = el;
+                                    break;
+                                }
+                            }
+                            if (target) break;
+                        }
+                        if (!target) return {ok: false, text: ''};
+
+                        target.focus();
+                        if (target.matches('input, textarea')) {
+                            const proto = target.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                            const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+                            if (setter) setter.call(target, value);
+                            else target.value = value;
+                        } else {
+                            target.innerText = value;
+                            target.textContent = value;
+                            const range = document.createRange();
+                            range.selectNodeContents(target);
+                            range.collapse(false);
+                            const selection = window.getSelection();
+                            selection.removeAllRanges();
+                            selection.addRange(range);
+                        }
+
+                        for (const type of ['beforeinput', 'input', 'change', 'keyup']) {
+                            try {
+                                target.dispatchEvent(new InputEvent(type, {bubbles: true, cancelable: true, inputType: 'insertText', data: value}));
+                            } catch (e) {
+                                target.dispatchEvent(new Event(type, {bubbles: true, cancelable: true}));
+                            }
+                        }
+                        return {ok: true, text: (target.innerText || target.value || target.textContent || '').trim()};
+                    }""",
+                    value,
+                )
+                return bool(result and result.get("ok") and value[:4] in (result.get("text") or ""))
+            except Exception:
+                return False
+
         def _click_send_button() -> bool:
             try:
                 send_btn = self._find_element(SELECTORS["chat_send_button"], timeout_ms=2000)
-                if send_btn:
+                if send_btn and send_btn.is_enabled():
                     self._safe_click(send_btn)
                     return True
             except Exception:
                 pass
             try:
                 send_btn = self.page.locator("text=发送").first
-                if send_btn.is_visible():
+                if send_btn.is_visible() and send_btn.is_enabled():
                     send_btn.click()
                     return True
+            except Exception:
+                pass
+            try:
+                return bool(
+                    self.page.evaluate("""() => {
+                        const visible = el => {
+                            const r = el.getBoundingClientRect();
+                            const s = getComputedStyle(el);
+                            return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                        };
+                        const candidates = [...document.querySelectorAll('button, a, div, span')]
+                            .filter(el => visible(el) && (el.innerText || '').trim() === '发送')
+                            .sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left);
+                        for (const el of candidates) {
+                            const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true' || /disabled|disable/.test(el.className || '');
+                            if (disabled) continue;
+                            const r = el.getBoundingClientRect();
+                            const opts = {bubbles: true, cancelable: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2};
+                            el.dispatchEvent(new MouseEvent('mousedown', opts));
+                            el.dispatchEvent(new MouseEvent('mouseup', opts));
+                            el.dispatchEvent(new MouseEvent('click', opts));
+                            return true;
+                        }
+                        return false;
+                    }""")
+                )
             except Exception:
                 pass
             return False
@@ -763,18 +872,24 @@ class BossAutomation(BossScraper):
             pause(0.3, 0.6)
 
             check = text[:8] if len(text) >= 8 else text[:4]
+            if check not in _draft_text():
+                _write_chat_input(text)
+                pause(0.2, 0.4)
+            if check not in _draft_text():
+                print("  ⚠️ send_message: 输入框未写入招呼语")
+                return False
 
-            # 按 Enter 发送
+            # 先点发送按钮，BOSS 聊天框有时不会响应 Enter。
+            clicked = _click_send_button()
+            pause(0.5, 1)
+            if clicked and check not in _draft_text():
+                return True
+
+            # 再用 Enter 兜底。
             self.page.keyboard.press("Enter")
             pause(0.5, 1)
             if _sent_message_visible(check) and check not in _draft_text():
                 return True
-
-            # 有些页面不会用 Enter 发送，改点发送按钮
-            if _click_send_button():
-                pause(0.5, 1)
-                if check not in _draft_text():
-                    return True
 
             # 再试一次 Enter
             try:

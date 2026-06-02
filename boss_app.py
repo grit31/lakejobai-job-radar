@@ -248,6 +248,8 @@ def _search_job_payload(job: dict, application: Optional[dict] = None) -> dict:
         "hr_name": application.get("hr_name") or job.get("hr_name", ""),
         "hr_title": application.get("hr_title") or job.get("hr_title", ""),
         "description": application.get("description") or job.get("description", ""),
+        "greeting_text": application.get("greeting_text") or "",
+        "greeting_sent_at": application.get("greeting_sent_at") or "",
         "status": application.get("status") or ("pending" if job.get("url") else "missing_url"),
     }
 
