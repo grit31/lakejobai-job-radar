@@ -31,6 +31,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             job_title TEXT NOT NULL,
             company TEXT,
+            company_size TEXT,
+            financing TEXT,
             salary TEXT,
             job_url TEXT UNIQUE NOT NULL,
             city TEXT,
@@ -115,6 +117,16 @@ def init_db():
         db.execute("ALTER TABLE conversations ADD COLUMN phone_shared INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
         pass
+    for table, column in (
+        ("applications", "company_size"),
+        ("applications", "financing"),
+        ("shortlists", "company_size"),
+        ("shortlists", "financing"),
+    ):
+        try:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+        except sqlite3.OperationalError:
+            pass
     # 候选池表
     db.executescript("""
         CREATE TABLE IF NOT EXISTS shortlists (
@@ -122,6 +134,8 @@ def init_db():
             job_url TEXT UNIQUE NOT NULL,
             job_title TEXT NOT NULL,
             company TEXT,
+            company_size TEXT,
+            financing TEXT,
             salary TEXT,
             city TEXT,
             note TEXT,
@@ -162,16 +176,47 @@ def _rows_to_list(rows) -> List[dict]:
 # ══════════════════════════════════════
 
 
+def _job_company(job: dict) -> str:
+    return job.get("company") or job.get("company_name") or job.get("brand_name") or job.get("brandName") or ""
+
+
+def _job_company_size(job: dict) -> str:
+    return (
+        job.get("company_size")
+        or job.get("companySize")
+        or job.get("company_scale")
+        or job.get("brand_scale")
+        or job.get("scale")
+        or job.get("size")
+        or ""
+    )
+
+
+def _job_financing(job: dict) -> str:
+    return (
+        job.get("financing")
+        or job.get("finance_stage")
+        or job.get("financing_stage")
+        or job.get("company_financing")
+        or job.get("brand_stage")
+        or ""
+    )
+
+
 def add_application(job: dict) -> int:
     db = get_db()
-    company = job.get("company") or job.get("company_name") or job.get("brand_name") or job.get("brandName") or ""
+    company = _job_company(job)
+    company_size = _job_company_size(job)
+    financing = _job_financing(job)
     cur = db.execute(
         """INSERT OR IGNORE INTO applications
-           (job_title, company, salary, job_url, city, experience, education, hr_name, hr_title, description)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           (job_title, company, company_size, financing, salary, job_url, city, experience, education, hr_name, hr_title, description)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             job.get("title", ""),
             company,
+            company_size,
+            financing,
             job.get("salary", ""),
             job.get("url", ""),
             job.get("city", ""),
@@ -196,10 +241,12 @@ def get_application_by_url(url: str) -> Optional[dict]:
 
 def update_application_from_job(app_id: int, job: dict) -> Optional[dict]:
     """用本次搜索结果刷新已有岗位；空值不覆盖旧值。"""
-    company = job.get("company") or job.get("company_name") or job.get("brand_name") or job.get("brandName") or ""
+    company = _job_company(job)
     fields = {
         "job_title": job.get("title", ""),
         "company": company,
+        "company_size": _job_company_size(job),
+        "financing": _job_financing(job),
         "salary": job.get("salary", ""),
         "city": job.get("city", ""),
         "experience": job.get("experience", ""),
@@ -567,13 +614,22 @@ def get_today_auto_reply_count() -> int:
 #  候选池
 # ═══════════════════════
 def add_to_shortlist(
-    job_url: str, title: str, company: str = "", salary: str = "", city: str = "", note: str = ""
+    job_url: str,
+    title: str,
+    company: str = "",
+    salary: str = "",
+    city: str = "",
+    note: str = "",
+    company_size: str = "",
+    financing: str = "",
 ) -> int:
     db = get_db()
     try:
         cur = db.execute(
-            "INSERT INTO shortlists (job_url, job_title, company, salary, city, note) VALUES (?,?,?,?,?,?)",
-            (job_url, title, company, salary, city, note),
+            """INSERT INTO shortlists
+               (job_url, job_title, company, company_size, financing, salary, city, note)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (job_url, title, company, company_size, financing, salary, city, note),
         )
         db.commit()
         return cur.lastrowid

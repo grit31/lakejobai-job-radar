@@ -76,6 +76,7 @@ body{font-family:var(--font);background:var(--surface);color:var(--text);font-si
 .job-card .company{color:var(--text);font-weight:500;white-space:nowrap}
 .job-card .salary{color:var(--red);font-weight:590;white-space:nowrap}
 .job-card .actions{display:flex;gap:6px;flex-shrink:0;margin-left:auto}
+.profile-tag{display:inline-block;font-size:11px;color:var(--text-3);border:1px solid var(--border);border-radius:3px;padding:1px 6px;margin-right:4px;white-space:nowrap}
 
 .badge{display:inline-block;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:510;border:1px solid var(--border)}
 .badge-pending{border-color:var(--border);color:var(--text-3)}
@@ -207,7 +208,7 @@ td a:hover{text-decoration:underline}
         </div>
         <div id="applyProgress"></div>
         <div style="overflow-x:auto;">
-          <table><thead><tr><th>岗位</th><th>公司</th><th>薪资</th><th>城市</th><th>状态</th><th>操作</th></tr></thead><tbody id="appTableBody"><tr><td colspan="6" class="empty">暂无数据</td></tr></tbody></table>
+          <table><thead><tr><th>岗位</th><th>公司</th><th>规模/融资</th><th>薪资</th><th>城市</th><th>状态</th><th>操作</th></tr></thead><tbody id="appTableBody"><tr><td colspan="7" class="empty">暂无数据</td></tr></tbody></table>
         </div>
         <div class="pagination" id="appPagination"></div>
       </div>
@@ -362,6 +363,15 @@ function doSearch(){
 }
 function loadJobs(){fetch('/api/jobs?limit=50').then(r=>r.json()).then(d=>{currentSearchJobs=[];renderJobs(d.jobs||[]);});}
 
+function companySizeOf(j){return j.company_size||j.companySize||j.company_scale||j.brand_scale||j.scale||j.size||'';}
+function financingOf(j){return j.financing||j.finance_stage||j.financing_stage||j.company_financing||j.brand_stage||'';}
+function profileTags(j){
+  let tags=[],size=companySizeOf(j),financing=financingOf(j);
+  if(size)tags.push(size);
+  if(financing)tags.push(financing);
+  return tags.map(t=>'<span class="profile-tag">'+esc(t)+'</span>').join('');
+}
+
 function renderJobs(jobs){
   const grid=document.getElementById('jobsGrid');
   if(!jobs||!jobs.length){grid.innerHTML='<div class="empty">暂无岗位</div>';document.getElementById('statPending').textContent='0';return;}
@@ -370,12 +380,13 @@ function renderJobs(jobs){
   grid.innerHTML=jobs.map(j=>{
     let hasUrl=!!j.job_url,s=j.status||(hasUrl?'pending':'missing_url'),titleText=j.job_title||j.title||'未知';
     let companyText=j.company||j.company_name||j.brand_name||'';
+    let profile=profileTags(j);
     let title=hasUrl?'<a href="'+attr(j.job_url)+'" target="_blank" rel="noopener">'+esc(titleText)+'</a>':esc(titleText);
     let acts='';
     if((s==='pending'||s==='failed')&&hasUrl)acts+='<button class="btn btn-xs btn-primary" data-action="apply" data-url="'+attr(j.job_url)+'">投递</button> ';
     acts+='<button class="btn btn-xs btn-secondary" onclick="analyzeJob(\''+attr(j.job_url)+'\',\''+attr(titleText)+'\',\''+attr(companyText)+'\',\''+attr((j.description||'').slice(0,500))+'\')">分析</button> ';
-    acts+='<button class="btn btn-xs btn-secondary" onclick="toggleShortlist(\''+attr(j.job_url)+'\',\''+attr(titleText)+'\',\''+attr(companyText)+'\',\''+attr(j.salary||'')+'\',\''+attr(j.city||'')+'\',this)">收藏</button>';
-    return'<div class="job-card"><div class="title">'+title+'</div><div class="meta">'+(companyText?'<span class="company">'+esc(companyText)+'</span>':'')+(j.salary?'<span class="salary">'+esc(j.salary)+'</span>':'')+(j.city?'<span>'+esc(j.city)+'</span>':'')+'<span class="badge '+sb[s]+'">'+sl[s]+'</span></div><div class="actions">'+acts+'</div></div>';
+    acts+='<button class="btn btn-xs btn-secondary" onclick="toggleShortlist(\''+attr(j.job_url)+'\',\''+attr(titleText)+'\',\''+attr(companyText)+'\',\''+attr(j.salary||'')+'\',\''+attr(j.city||'')+'\',\''+attr(companySizeOf(j))+'\',\''+attr(financingOf(j))+'\',this)">收藏</button>';
+    return'<div class="job-card"><div class="title">'+title+'</div><div class="meta">'+(companyText?'<span class="company">'+esc(companyText)+'</span>':'')+profile+(j.salary?'<span class="salary">'+esc(j.salary)+'</span>':'')+(j.city?'<span>'+esc(j.city)+'</span>':'')+'<span class="badge '+sb[s]+'">'+sl[s]+'</span></div><div class="actions">'+acts+'</div></div>';
   }).join('');
   document.getElementById('statPending').textContent=jobs.filter(j=>(j.status||'pending')==='pending').length;
 }
@@ -403,8 +414,8 @@ function analyzeJob(url,title,company,desc){
   }).catch(e=>{document.getElementById('analyzeResult').innerHTML='<div style="color:var(--red);">失败: '+e.message+'</div>';});
 }
 
-function toggleShortlist(url,title,company,salary,city,btn){
-  fetch('/api/shortlists',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_url:url,title,company,salary,city})}).then(r=>r.json()).then(d=>{
+function toggleShortlist(url,title,company,salary,city,companySize,financing,btn){
+  fetch('/api/shortlists',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_url:url,title,company,salary,city,company_size:companySize,financing})}).then(r=>r.json()).then(d=>{
     if(d.status==='already_exists'||d.status==='duplicate'){btn.textContent='已收藏';btn.style.opacity='.5';}else{btn.textContent='已收藏';btn.style.opacity='1';}
   });
 }
@@ -415,17 +426,17 @@ function renderAppPage(){
   let tbody=document.getElementById('appTableBody'),total=appAllJobs.length,totalPages=Math.max(1,Math.ceil(total/APP_PAGE_SIZE)),start=(appCurrentPage-1)*APP_PAGE_SIZE;
   if(appCurrentPage>totalPages)appCurrentPage=totalPages;
   let page=appAllJobs.slice(start,start+APP_PAGE_SIZE);
-  if(!total){tbody.innerHTML='<tr><td colspan="6" class="empty">暂无记录</td></tr>';document.getElementById('appPagination').innerHTML='';return;}
+  if(!total){tbody.innerHTML='<tr><td colspan="7" class="empty">暂无记录</td></tr>';document.getElementById('appPagination').innerHTML='';return;}
   let sl={pending:'待投递',applied:'已投递',replied:'已回复',skipped:'已跳过',failed:'失败'},sb={pending:'badge-pending',applied:'badge-applied',replied:'badge-replied',skipped:'badge-skipped',failed:'badge-failed'};
-  tbody.innerHTML=page.map(j=>{let s=j.status||'pending';return'<tr><td><a href="'+attr(j.job_url)+'" target="_blank">'+esc(j.job_title||j.title||'未知')+'</a></td><td>'+esc(j.company||'')+'</td><td>'+esc(j.salary||'')+'</td><td>'+esc(j.city||'')+'</td><td><span class="badge '+sb[s]+'">'+sl[s]+'</span></td><td>'+(j.job_url?'<button class="btn btn-sm btn-primary" onclick="applyOne(\''+attr(j.job_url)+'\',this)">投递</button>':'')+'</td></tr>';}).join('');
+  tbody.innerHTML=page.map(j=>{let s=j.status||'pending';return'<tr><td><a href="'+attr(j.job_url)+'" target="_blank">'+esc(j.job_title||j.title||'未知')+'</a></td><td>'+esc(j.company||'')+'</td><td>'+profileTags(j)+'</td><td>'+esc(j.salary||'')+'</td><td>'+esc(j.city||'')+'</td><td><span class="badge '+sb[s]+'">'+sl[s]+'</span></td><td>'+(j.job_url?'<button class="btn btn-sm btn-primary" onclick="applyOne(\''+attr(j.job_url)+'\',this)">投递</button>':'')+'</td></tr>';}).join('');
   document.getElementById('appPagination').innerHTML='<button '+(appCurrentPage<=1?'disabled':'')+' onclick="appCurrentPage=1;renderAppPage()">«</button><button '+(appCurrentPage<=1?'disabled':'')+' onclick="appCurrentPage--;renderAppPage()">‹</button><span>'+(start+1)+'-'+Math.min(start+APP_PAGE_SIZE,total)+' / '+total+'</span><button '+(appCurrentPage>=totalPages?'disabled':'')+' onclick="appCurrentPage++;renderAppPage()">›</button><button '+(appCurrentPage>=totalPages?'disabled':'')+' onclick="appCurrentPage=totalPages;renderAppPage()">»</button>';
 }
 
 function loadShortlists(){
   fetch('/api/shortlists').then(r=>r.json()).then(d=>{
     let tbody=document.getElementById('appTableBody'),sl=d.shortlists||[];
-    if(!sl.length){tbody.innerHTML='<tr><td colspan="6" class="empty">暂无收藏</td></tr>';return;}
-    tbody.innerHTML=sl.map(s=>'<tr><td><a href="'+attr(s.job_url)+'" target="_blank">'+esc(s.job_title)+'</a></td><td>'+esc(s.company||'')+'</td><td>'+esc(s.salary||'')+'</td><td>'+esc(s.city||'')+'</td><td><span class="badge badge-applied">收藏</span></td><td><button class="btn btn-sm btn-secondary" onclick="removeShortlist('+s.id+',this)">取消</button> <button class="btn btn-sm btn-primary" onclick="applyOne(\''+attr(s.job_url)+'\',this)">投递</button></td></tr>').join('');
+    if(!sl.length){tbody.innerHTML='<tr><td colspan="7" class="empty">暂无收藏</td></tr>';return;}
+    tbody.innerHTML=sl.map(s=>'<tr><td><a href="'+attr(s.job_url)+'" target="_blank">'+esc(s.job_title)+'</a></td><td>'+esc(s.company||'')+'</td><td>'+profileTags(s)+'</td><td>'+esc(s.salary||'')+'</td><td>'+esc(s.city||'')+'</td><td><span class="badge badge-applied">收藏</span></td><td><button class="btn btn-sm btn-secondary" onclick="removeShortlist('+s.id+',this)">取消</button> <button class="btn btn-sm btn-primary" onclick="applyOne(\''+attr(s.job_url)+'\',this)">投递</button></td></tr>').join('');
   });
 }
 function removeShortlist(id,btn){fetch('/api/shortlists/'+id,{method:'DELETE'}).then(()=>loadShortlists());}

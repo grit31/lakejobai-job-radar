@@ -215,10 +215,31 @@ def _search_job_payload(job: dict, application: Optional[dict] = None) -> dict:
         or job.get("brandName")
         or ""
     )
+    company_size = (
+        application.get("company_size")
+        or job.get("company_size")
+        or job.get("companySize")
+        or job.get("company_scale")
+        or job.get("brand_scale")
+        or job.get("scale")
+        or job.get("size")
+        or ""
+    )
+    financing = (
+        application.get("financing")
+        or job.get("financing")
+        or job.get("finance_stage")
+        or job.get("financing_stage")
+        or job.get("company_financing")
+        or job.get("brand_stage")
+        or ""
+    )
     return {
         "id": application.get("id"),
         "job_title": application.get("job_title") or job.get("title", ""),
         "company": company,
+        "company_size": company_size,
+        "financing": financing,
         "salary": application.get("salary") or job.get("salary", ""),
         "job_url": application.get("job_url") or _normalize_job_url(job.get("url", "")),
         "city": application.get("city") or job.get("city", ""),
@@ -899,6 +920,8 @@ def add_shortlist(req: dict = {}):
         req.get("salary", ""),
         req.get("city", ""),
         req.get("note", ""),
+        req.get("company_size", "") or req.get("companySize", ""),
+        req.get("financing", "") or req.get("finance_stage", ""),
     )
     if sid:
         return {"status": "ok", "id": sid}

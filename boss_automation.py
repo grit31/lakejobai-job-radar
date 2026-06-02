@@ -11,7 +11,7 @@ from typing import Optional, List, Dict, Any
 
 from playwright.sync_api import Locator
 
-from boss_firefox import BossScraper, pause, decode_salary, pick_company_from_lines
+from boss_firefox import BossScraper, pause, decode_salary, pick_company_from_lines, pick_company_profile_from_lines
 from boss_state import (
     init_db,
     add_application,
@@ -973,11 +973,14 @@ class BossAutomation(BossScraper):
                     elif "·" in ln and len(ln) < 30:
                         city = ln
                 company = pick_company_from_lines(card_lines, title, salary, city)
+                company_profile = pick_company_profile_from_lines(card_lines)
                 jobs.append(
                     {
                         "title": title,
                         "salary": salary,
                         "company": company,
+                        "company_size": company_profile["company_size"],
+                        "financing": company_profile["financing"],
                         "experience": exp,
                         "education": edu,
                         "city": city,

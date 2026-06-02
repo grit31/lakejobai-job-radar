@@ -349,6 +349,33 @@ def salary_ok(text):
     return 15 <= l and h <= 35
 
 
+COMPANY_SIZE_RE = re.compile(r"(?:少于)?\d+(?:-\d+|\+)?人(?:以上)?|10000人以上")
+FINANCING_RE = re.compile(
+    r"未融资|无需融资|不需要融资|融资未公开|天使轮|种子轮|Pre[-\s]?[A-Z]轮|[A-G]\+?轮|战略融资|已上市|上市公司|新三板|并购|IPO",
+    re.I,
+)
+
+
+def pick_company_profile_from_lines(lines):
+    """从岗位卡片文本行里提取公司规模和融资阶段。"""
+    profile = {"company_size": "", "financing": ""}
+    for line in lines:
+        line = (line or "").strip()
+        if not line:
+            continue
+        if not profile["company_size"]:
+            size_match = COMPANY_SIZE_RE.search(line)
+            if size_match:
+                profile["company_size"] = size_match.group(0)
+        if not profile["financing"]:
+            financing_match = FINANCING_RE.search(line)
+            if financing_match:
+                profile["financing"] = financing_match.group(0)
+        if profile["company_size"] and profile["financing"]:
+            break
+    return profile
+
+
 def looks_like_company_line(text, title="", salary="", city=""):
     """判断一行文本是否更像公司名，而不是薪资、地点、学历或福利标签。"""
     text = (text or "").strip()
@@ -364,6 +391,8 @@ def looks_like_company_line(text, title="", salary="", city=""):
     if "·" in text and len(text) < 35:
         return False
     if re.search(r"经验|应届|在校|不限|本科|硕士|博士|大专|学历|中专|高中|天/周|元/天", text):
+        return False
+    if COMPANY_SIZE_RE.search(text) or FINANCING_RE.search(text):
         return False
     if re.search(r"搜索|筛选|职位|岗位|薪资|投递|沟通|收藏|分析|BOSS|登录|发布时间|最近活跃", text, re.I):
         return False
@@ -640,12 +669,15 @@ class BossScraper:
                 elif "·" in ln and len(ln) < 30:
                     city = ln
             company = pick_company_from_lines(card_lines, title, salary, city)
+            company_profile = pick_company_profile_from_lines(card_lines)
 
             jobs.append(
                 {
                     "title": title,
                     "salary": salary,
                     "company": company,
+                    "company_size": company_profile["company_size"],
+                    "financing": company_profile["financing"],
                     "experience": exp,
                     "education": edu,
                     "city": city,
@@ -720,9 +752,30 @@ class BossScraper:
                     if (/\\d+[-~]\\d+K/i.test(value)) return true;
                     if (value.includes('·') && value.length < 35) return true;
                     if (/经验|应届|在校|不限|本科|硕士|博士|大专|学历|中专|高中|天\\/周|元\\/天/.test(value)) return true;
+                    if (/(?:少于)?\\d+(?:-\\d+|\\+)?人(?:以上)?|10000人以上/.test(value)) return true;
+                    if (/未融资|无需融资|不需要融资|融资未公开|天使轮|种子轮|Pre[-\\s]?[A-Z]轮|[A-G]\\+?轮|战略融资|已上市|上市公司|新三板|并购|IPO/i.test(value)) return true;
                     if (/搜索|筛选|职位|岗位|薪资|投递|沟通|收藏|分析|BOSS|登录|发布时间|最近活跃/i.test(value)) return true;
                     if (/五险|双休|周末|餐补|交通|年终奖|带薪|绩效|奖金|房补|补贴|保险|股票|节假日/.test(value)) return true;
                     return false;
+                };
+                const pickCompanyProfile = (root) => {
+                    const lines = linesOf(root);
+                    const sizePattern = /(?:少于)?\\d+(?:-\\d+|\\+)?人(?:以上)?|10000人以上/;
+                    const financingPattern = /未融资|无需融资|不需要融资|融资未公开|天使轮|种子轮|Pre[-\\s]?[A-Z]轮|[A-G]\\+?轮|战略融资|已上市|上市公司|新三板|并购|IPO/i;
+                    let companySize = '';
+                    let financing = '';
+                    for (const line of lines) {
+                        if (!companySize) {
+                            const m = line.match(sizePattern);
+                            if (m) companySize = m[0];
+                        }
+                        if (!financing) {
+                            const m = line.match(financingPattern);
+                            if (m) financing = m[0];
+                        }
+                        if (companySize && financing) break;
+                    }
+                    return {companySize, financing};
                 };
                 const pickCompany = (root, title, salary, city) => {
                     const selectors = [
@@ -768,9 +821,20 @@ class BossScraper:
                     salary = clean(salary);
                     city = clean(city);
                     let company = pickCompany(card, title, salary, city);
+                    let companyProfile = pickCompanyProfile(card);
                     if (title && salary) {
                         seen.add(href);
-                        cards.push({title, salary, company, city, experience, education, url: href});
+                        cards.push({
+                            title,
+                            salary,
+                            company,
+                            companySize: companyProfile.companySize,
+                            financing: companyProfile.financing,
+                            city,
+                            experience,
+                            education,
+                            url: href
+                        });
                     }
                 });
                 return cards;
@@ -791,6 +855,8 @@ class BossScraper:
                     "title": title,
                     "salary": decode_salary((row.get("salary") or "").strip()),
                     "company": (row.get("company") or "").strip(),
+                    "company_size": (row.get("companySize") or row.get("company_size") or "").strip(),
+                    "financing": (row.get("financing") or row.get("finance_stage") or "").strip(),
                     "experience": (row.get("experience") or "").strip(),
                     "education": (row.get("education") or "").strip(),
                     "city": (row.get("city") or "").strip(),
@@ -944,6 +1010,10 @@ def output_report(jobs):
     for i, j in enumerate(jobs, 1):
         lines.append("### %d. %s %s" % (i, j["title"], j["salary"]))
         lines.append("- 公司: %s" % (j.get("company") or "未显示"))
+        if j.get("company_size"):
+            lines.append("- 规模: %s" % j["company_size"])
+        if j.get("financing"):
+            lines.append("- 融资: %s" % j["financing"])
         if j.get("city"):
             lines.append("- 城市: %s" % j["city"])
         if j.get("experience"):
@@ -1086,6 +1156,8 @@ def main():
                 fieldnames=[
                     "title",
                     "company",
+                    "company_size",
+                    "financing",
                     "salary",
                     "city",
                     "experience",
