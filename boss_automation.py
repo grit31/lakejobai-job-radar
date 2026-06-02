@@ -11,7 +11,7 @@ from typing import Optional, List, Dict, Any
 
 from playwright.sync_api import Locator
 
-from boss_firefox import BossScraper, pause, decode_salary
+from boss_firefox import BossScraper, pause, decode_salary, pick_company_from_lines
 from boss_state import (
     init_db,
     add_application,
@@ -961,8 +961,9 @@ class BossAutomation(BossScraper):
                 if not (2 < len(title) < 60):
                     continue
                 salary = decode_salary(lines[si])
-                company = exp = edu = city = ""
+                exp = edu = city = ""
                 end = sal_idx[n + 1] if n + 1 < len(sal_idx) else min(si + 10, len(lines))
+                card_lines = lines[si + 1 : min(end, len(lines))]
                 for j in range(si + 1, min(end, len(lines))):
                     ln = lines[j]
                     if "经验" in ln or "应届" in ln:
@@ -971,13 +972,7 @@ class BossAutomation(BossScraper):
                         edu = ln
                     elif "·" in ln and len(ln) < 30:
                         city = ln
-                    elif (
-                        not company
-                        and len(ln) > 2
-                        and len(ln) < 40
-                        and not re.search(r"年|学历|大专|本科|硕士|博士|不限|应届|·", ln)
-                    ):
-                        company = ln
+                company = pick_company_from_lines(card_lines, title, salary, city)
                 jobs.append(
                     {
                         "title": title,

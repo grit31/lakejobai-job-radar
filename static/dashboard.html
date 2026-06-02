@@ -73,6 +73,7 @@ body{font-family:var(--font);background:var(--surface);color:var(--text);font-si
 .job-card .title a{color:var(--text);text-decoration:none}
 .job-card .title a:hover{text-decoration:underline}
 .job-card .meta{font-size:12px;color:var(--text-3);display:flex;gap:10px;flex-wrap:wrap;flex:1;min-width:0}
+.job-card .company{color:var(--text);font-weight:500;white-space:nowrap}
 .job-card .salary{color:var(--red);font-weight:590;white-space:nowrap}
 .job-card .actions{display:flex;gap:6px;flex-shrink:0;margin-left:auto}
 
@@ -368,12 +369,13 @@ function renderJobs(jobs){
   const sb={pending:'badge-pending',applied:'badge-applied',replied:'badge-replied',skipped:'badge-skipped',failed:'badge-failed',missing_url:'badge-missing_url'};
   grid.innerHTML=jobs.map(j=>{
     let hasUrl=!!j.job_url,s=j.status||(hasUrl?'pending':'missing_url'),titleText=j.job_title||j.title||'未知';
+    let companyText=j.company||j.company_name||j.brand_name||'';
     let title=hasUrl?'<a href="'+attr(j.job_url)+'" target="_blank" rel="noopener">'+esc(titleText)+'</a>':esc(titleText);
     let acts='';
     if((s==='pending'||s==='failed')&&hasUrl)acts+='<button class="btn btn-xs btn-primary" data-action="apply" data-url="'+attr(j.job_url)+'">投递</button> ';
-    acts+='<button class="btn btn-xs btn-secondary" onclick="analyzeJob(\''+attr(j.job_url)+'\',\''+attr(titleText)+'\',\''+attr(j.company||'')+'\',\''+attr((j.description||'').slice(0,500))+'\')">分析</button> ';
-    acts+='<button class="btn btn-xs btn-secondary" onclick="toggleShortlist(\''+attr(j.job_url)+'\',\''+attr(titleText)+'\',\''+attr(j.company||'')+'\',\''+attr(j.salary||'')+'\',\''+attr(j.city||'')+'\',this)">收藏</button>';
-    return'<div class="job-card"><div class="title">'+title+'</div><div class="meta">'+(j.company?'<span>'+esc(j.company)+'</span>':'')+(j.salary?'<span class="salary">'+esc(j.salary)+'</span>':'')+(j.city?'<span>'+esc(j.city)+'</span>':'')+'<span class="badge '+sb[s]+'">'+sl[s]+'</span></div><div class="actions">'+acts+'</div></div>';
+    acts+='<button class="btn btn-xs btn-secondary" onclick="analyzeJob(\''+attr(j.job_url)+'\',\''+attr(titleText)+'\',\''+attr(companyText)+'\',\''+attr((j.description||'').slice(0,500))+'\')">分析</button> ';
+    acts+='<button class="btn btn-xs btn-secondary" onclick="toggleShortlist(\''+attr(j.job_url)+'\',\''+attr(titleText)+'\',\''+attr(companyText)+'\',\''+attr(j.salary||'')+'\',\''+attr(j.city||'')+'\',this)">收藏</button>';
+    return'<div class="job-card"><div class="title">'+title+'</div><div class="meta">'+(companyText?'<span class="company">'+esc(companyText)+'</span>':'')+(j.salary?'<span class="salary">'+esc(j.salary)+'</span>':'')+(j.city?'<span>'+esc(j.city)+'</span>':'')+'<span class="badge '+sb[s]+'">'+sl[s]+'</span></div><div class="actions">'+acts+'</div></div>';
   }).join('');
   document.getElementById('statPending').textContent=jobs.filter(j=>(j.status||'pending')==='pending').length;
 }

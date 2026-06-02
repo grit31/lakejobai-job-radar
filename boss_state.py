@@ -164,13 +164,14 @@ def _rows_to_list(rows) -> List[dict]:
 
 def add_application(job: dict) -> int:
     db = get_db()
+    company = job.get("company") or job.get("company_name") or job.get("brand_name") or job.get("brandName") or ""
     cur = db.execute(
         """INSERT OR IGNORE INTO applications
            (job_title, company, salary, job_url, city, experience, education, hr_name, hr_title, description)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             job.get("title", ""),
-            job.get("company", ""),
+            company,
             job.get("salary", ""),
             job.get("url", ""),
             job.get("city", ""),
@@ -195,9 +196,10 @@ def get_application_by_url(url: str) -> Optional[dict]:
 
 def update_application_from_job(app_id: int, job: dict) -> Optional[dict]:
     """用本次搜索结果刷新已有岗位；空值不覆盖旧值。"""
+    company = job.get("company") or job.get("company_name") or job.get("brand_name") or job.get("brandName") or ""
     fields = {
         "job_title": job.get("title", ""),
-        "company": job.get("company", ""),
+        "company": company,
         "salary": job.get("salary", ""),
         "city": job.get("city", ""),
         "experience": job.get("experience", ""),

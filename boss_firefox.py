@@ -349,6 +349,44 @@ def salary_ok(text):
     return 15 <= l and h <= 35
 
 
+def looks_like_company_line(text, title="", salary="", city=""):
+    """判断一行文本是否更像公司名，而不是薪资、地点、学历或福利标签。"""
+    text = (text or "").strip()
+    title = (title or "").strip()
+    salary = (salary or "").strip()
+    city = (city or "").strip()
+    if not text or text in {title, salary, city}:
+        return False
+    if len(text) < 2 or len(text) > 60:
+        return False
+    if re.search(r"\d+[-~]\d+K", decode_salary(text), re.I):
+        return False
+    if "·" in text and len(text) < 35:
+        return False
+    if re.search(r"经验|应届|在校|不限|本科|硕士|博士|大专|学历|中专|高中|天/周|元/天", text):
+        return False
+    if re.search(r"搜索|筛选|职位|岗位|薪资|投递|沟通|收藏|分析|BOSS|登录|发布时间|最近活跃", text, re.I):
+        return False
+    if re.search(r"五险|双休|周末|餐补|交通|年终奖|带薪|绩效|奖金|房补|补贴|保险|股票|节假日", text):
+        return False
+    return bool(re.search(r"[\u4e00-\u9fa5A-Za-z0-9]", text))
+
+
+def pick_company_from_lines(lines, title="", salary="", city=""):
+    """从岗位卡片文本行里挑出最可能的公司名。"""
+    preferred = []
+    fallback = []
+    for line in lines:
+        line = (line or "").strip()
+        if not looks_like_company_line(line, title, salary, city):
+            continue
+        if re.search(r"公司|科技|信息|咨询|教育|网络|智能|集团|股份|有限|工作室|中心|银行|文化|传媒|贸易|电子|软件|数据|服务|管理|互联网|AI|人工智能", line, re.I):
+            preferred.append(line)
+        else:
+            fallback.append(line)
+    return (preferred or fallback or [""])[0]
+
+
 def pause(a=1.0, b=3.0):
     time.sleep(random.uniform(a, b))
 
@@ -590,8 +628,9 @@ class BossScraper:
                 continue
 
             salary = decode_salary(lines[si])
-            company = exp = edu = city = ""
+            exp = edu = city = ""
             end = sal_idx[n + 1] if n + 1 < len(sal_idx) else min(si + 10, len(lines))
+            card_lines = lines[si + 1 : min(end, len(lines))]
             for j in range(si + 1, min(end, len(lines))):
                 ln = lines[j]
                 if "经验" in ln or "应届" in ln:
@@ -600,13 +639,7 @@ class BossScraper:
                     edu = ln
                 elif "·" in ln and len(ln) < 30:
                     city = ln
-                elif (
-                    not company
-                    and len(ln) > 2
-                    and len(ln) < 40
-                    and not re.search(r"年|学历|大专|本科|硕士|博士|不限|应届|·", ln)
-                ):
-                    company = ln
+            company = pick_company_from_lines(card_lines, title, salary, city)
 
             jobs.append(
                 {
@@ -649,24 +682,77 @@ class BossScraper:
         """优先从岗位卡片 DOM 提取，避免正文行号变化导致链接和岗位错配。"""
         try:
             rows = self.page.evaluate("""() => {
-                const pickText = (root, selectors) => {
-                    for (const sel of selectors) {
-                        const el = root.querySelector(sel);
-                        const text = (el && el.innerText || '').trim();
-                        if (text) return text;
-                    }
-                    return '';
-                };
+                const clean = (value) => (value || '').replace(/\\s+/g, ' ').trim();
                 const linesOf = (root) => (root.innerText || '')
                     .split('\\n')
                     .map(s => s.trim())
                     .filter(Boolean);
+                const pickText = (root, selectors) => {
+                    for (const sel of selectors) {
+                        for (const el of root.querySelectorAll(sel)) {
+                            const text = clean(el.innerText || el.textContent || '');
+                            if (text) return text;
+                        }
+                    }
+                    return '';
+                };
+                const findCard = (anchor) => {
+                    const selectors = [
+                        '.job-card-wrapper',
+                        '.job-card-box',
+                        '.job-card',
+                        '.job-list-item',
+                        '.job-primary',
+                        'li',
+                        '.job-list-box',
+                        '.search-job-result'
+                    ];
+                    for (const sel of selectors) {
+                        const card = anchor.closest(sel);
+                        if (card) return card;
+                    }
+                    return anchor;
+                };
+                const invalidCompany = (text, title, salary, city) => {
+                    const value = clean(text);
+                    if (!value || value === title || value === salary || value === city) return true;
+                    if (value.length < 2 || value.length > 60) return true;
+                    if (/\\d+[-~]\\d+K/i.test(value)) return true;
+                    if (value.includes('·') && value.length < 35) return true;
+                    if (/经验|应届|在校|不限|本科|硕士|博士|大专|学历|中专|高中|天\\/周|元\\/天/.test(value)) return true;
+                    if (/搜索|筛选|职位|岗位|薪资|投递|沟通|收藏|分析|BOSS|登录|发布时间|最近活跃/i.test(value)) return true;
+                    if (/五险|双休|周末|餐补|交通|年终奖|带薪|绩效|奖金|房补|补贴|保险|股票|节假日/.test(value)) return true;
+                    return false;
+                };
+                const pickCompany = (root, title, salary, city) => {
+                    const selectors = [
+                        '.company-name',
+                        '.brand-name',
+                        '.company-text',
+                        '.company-info .company-name',
+                        '.job-card-right .company-name',
+                        '.job-card-right [class*="company"]',
+                        '.job-card-footer .company-name',
+                        'a[href*="/gongsi/"]',
+                        'a[href*="/company/"]',
+                        '[ka*="company"]',
+                        '[class*="company-name"]',
+                        '[class*="brand-name"]'
+                    ];
+                    for (const sel of selectors) {
+                        for (const el of root.querySelectorAll(sel)) {
+                            const line = linesOf(el).find(x => !invalidCompany(x, title, salary, city));
+                            if (line) return clean(line);
+                        }
+                    }
+                    return linesOf(root).find(x => !invalidCompany(x, title, salary, city)) || '';
+                };
                 const cards = [];
                 const seen = new Set();
                 document.querySelectorAll('a[href*="/job_detail/"]').forEach(a => {
                     const href = a.href || a.getAttribute('href') || '';
                     if (!href || seen.has(href)) return;
-                    const card = a.closest('.job-card-wrapper, .job-card-body, .job-primary, li, .job-list-box, .search-job-result') || a;
+                    const card = findCard(a);
                     const lines = linesOf(card);
                     let title = pickText(card, [
                         '.job-name', '.job-title', '.job-card-left .job-name',
@@ -674,22 +760,14 @@ class BossScraper:
                     ]) || (a.innerText || '').trim().split('\\n')[0] || lines[0] || '';
                     let salary = pickText(card, ['.salary', '.red', '[class*="salary"]'])
                         || lines.find(x => /\\d+[-~]\\d+K/i.test(x)) || '';
-                    let company = pickText(card, [
-                        '.company-name', '.brand-name', '.company-text',
-                        '[class*="company-name"]', '[class*="brand-name"]'
-                    ]);
                     let city = pickText(card, ['.job-area', '[class*="job-area"]'])
                         || lines.find(x => x.includes('·') && x.length < 40) || '';
                     let experience = lines.find(x => /经验|应届|在校|不限/.test(x) && x.length < 30) || '';
                     let education = lines.find(x => /本科|硕士|博士|大专|学历不限|中专|高中/.test(x) && x.length < 30) || '';
-                    if (!company) {
-                        company = lines.find(x =>
-                            x !== title && x !== salary && x !== city &&
-                            !/经验|应届|在校|不限|本科|硕士|博士|大专|学历|·|\\d+[-~]\\d+K/i.test(x) &&
-                            x.length > 1 && x.length < 40
-                        ) || '';
-                    }
-                    title = title.replace(/\\s+/g, ' ').trim();
+                    title = clean(title);
+                    salary = clean(salary);
+                    city = clean(city);
+                    let company = pickCompany(card, title, salary, city);
                     if (title && salary) {
                         seen.add(href);
                         cards.push({title, salary, company, city, experience, education, url: href});

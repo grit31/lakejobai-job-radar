@@ -207,10 +207,18 @@ def _normalize_job_url(url: str) -> str:
 def _search_job_payload(job: dict, application: Optional[dict] = None) -> dict:
     """统一搜索结果和数据库记录的字段名，方便前端直接渲染。"""
     application = application or {}
+    company = (
+        application.get("company")
+        or job.get("company")
+        or job.get("company_name")
+        or job.get("brand_name")
+        or job.get("brandName")
+        or ""
+    )
     return {
         "id": application.get("id"),
         "job_title": application.get("job_title") or job.get("title", ""),
-        "company": application.get("company") or job.get("company", ""),
+        "company": company,
         "salary": application.get("salary") or job.get("salary", ""),
         "job_url": application.get("job_url") or _normalize_job_url(job.get("url", "")),
         "city": application.get("city") or job.get("city", ""),
