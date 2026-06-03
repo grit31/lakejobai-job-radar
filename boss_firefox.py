@@ -329,17 +329,31 @@ MY_SKILLS = {
 }
 
 
+SALARY_RE = re.compile(
+    r"\d+(?:\.\d+)?\s*[-~－—]\s*\d+(?:\.\d+)?\s*(?:K|k|千|万|元/天|元/日|元/时|元/小时|元/月|元/周|元/年|/天|/日|/月|/周|/年)(?:·\d+薪)?"
+)
+
+
 def decode_salary(text):
-    return "".join(str(ord(c) - 0xE030) if 0xE030 <= ord(c) <= 0xE039 else c for c in text)
+    """解码 BOSS 私有数字字符；当前站点把 U+E031 映射为 0。"""
+    return "".join(str(ord(c) - 0xE031) if 0xE031 <= ord(c) <= 0xE03A else c for c in text)
+
+
+def extract_salary(text):
+    decoded = decode_salary(text or "")
+    match = SALARY_RE.search(decoded.replace(" ", ""))
+    return match.group(0) if match else ""
+
+
+def looks_like_salary(text):
+    return bool(extract_salary(text))
 
 
 def salary_ok(text):
     if not text:
         return False
-    nums = re.findall(
-        r"(\d+)",
-        re.sub(r"[^\d-]", "", text.replace("~", "-").replace("K", "").replace("k", "")),
-    )
+    salary = extract_salary(text) or decode_salary(text)
+    nums = re.findall(r"(\d+)", re.sub(r"[^\d-]", "", salary.replace("~", "-")))
     if len(nums) < 2:
         return False
     l, h = int(nums[0]), int(nums[1])
@@ -386,7 +400,7 @@ def looks_like_company_line(text, title="", salary="", city=""):
         return False
     if len(text) < 2 or len(text) > 60:
         return False
-    if re.search(r"\d+[-~]\d+K", decode_salary(text), re.I):
+    if looks_like_salary(text):
         return False
     if "·" in text and len(text) < 35:
         return False
@@ -644,7 +658,7 @@ class BossScraper:
         lines = [l.strip() for l in self.page.inner_text("body").split("\n") if l.strip()]
 
         # 薪资行定位
-        sal_idx = [i for i, l in enumerate(lines) if re.search(r"\d+[-~]\d+K", decode_salary(l), re.I)]
+        sal_idx = [i for i, l in enumerate(lines) if looks_like_salary(l)]
 
         jobs = []
         for n, si in enumerate(sal_idx):
@@ -656,7 +670,7 @@ class BossScraper:
             if not (2 < len(title) < 60):
                 continue
 
-            salary = decode_salary(lines[si])
+            salary = extract_salary(lines[si]) or decode_salary(lines[si])
             exp = edu = city = ""
             end = sal_idx[n + 1] if n + 1 < len(sal_idx) else min(si + 10, len(lines))
             card_lines = lines[si + 1 : min(end, len(lines))]
@@ -719,6 +733,14 @@ class BossScraper:
                     .split('\\n')
                     .map(s => s.trim())
                     .filter(Boolean);
+                const salaryPattern = /\\d+(?:\\.\\d+)?\\s*[-~－—]\\s*\\d+(?:\\.\\d+)?\\s*(?:K|k|千|万|元\\/天|元\\/日|元\\/时|元\\/小时|元\\/月|元\\/周|元\\/年|\\/天|\\/日|\\/月|\\/周|\\/年)(?:·\\d+薪)?/;
+                const findSalary = (lines) => {
+                    for (const line of lines) {
+                        const m = clean(line).match(salaryPattern);
+                        if (m) return m[0].replace(/\\s+/g, '');
+                    }
+                    return '';
+                };
                 const pickText = (root, selectors) => {
                     for (const sel of selectors) {
                         for (const el of root.querySelectorAll(sel)) {
@@ -749,7 +771,7 @@ class BossScraper:
                     const value = clean(text);
                     if (!value || value === title || value === salary || value === city) return true;
                     if (value.length < 2 || value.length > 60) return true;
-                    if (/\\d+[-~]\\d+K/i.test(value)) return true;
+                    if (salaryPattern.test(value)) return true;
                     if (value.includes('·') && value.length < 35) return true;
                     if (/经验|应届|在校|不限|本科|硕士|博士|大专|学历|中专|高中|天\\/周|元\\/天/.test(value)) return true;
                     if (/(?:少于)?\\d+(?:-\\d+|\\+)?人(?:以上|以下)?|10000人以上|\\d+人以下/.test(value)) return true;
@@ -772,8 +794,8 @@ class BossScraper:
                     }
                     profileLines.push(...linesOf(root));
                     let parent = root.parentElement;
-                    for (let i = 0; parent && i < 3; i++, parent = parent.parentElement) {
-                        if ((parent.innerText || '').length < 1200) {
+                    for (let i = 0; parent && i < 6; i++, parent = parent.parentElement) {
+                        if ((parent.innerText || '').length < 2600) {
                             profileLines.push(...linesOf(parent));
                         }
                     }
@@ -823,20 +845,28 @@ class BossScraper:
                 document.querySelectorAll('a[href*="/job_detail/"]').forEach(a => {
                     const href = a.href || a.getAttribute('href') || '';
                     if (!href || seen.has(href)) return;
-                    const card = findCard(a);
+                    let card = findCard(a);
+                    let parent = card.parentElement;
+                    for (let i = 0; parent && i < 5; i++, parent = parent.parentElement) {
+                        const text = parent.innerText || '';
+                        if (text.length < 2600 && (text.includes('融资') || text.includes('已上市') || text.includes('人'))) {
+                            card = parent;
+                            break;
+                        }
+                    }
                     const lines = linesOf(card);
                     let title = pickText(card, [
                         '.job-name', '.job-title', '.job-card-left .job-name',
                         '[class*="job-name"]', '[class*="job-title"]'
                     ]) || (a.innerText || '').trim().split('\\n')[0] || lines[0] || '';
                     let salary = pickText(card, ['.salary', '.red', '[class*="salary"]'])
-                        || lines.find(x => /\\d+[-~]\\d+K/i.test(x)) || '';
+                        || findSalary(lines) || '';
                     let city = pickText(card, ['.job-area', '[class*="job-area"]'])
                         || lines.find(x => x.includes('·') && x.length < 40) || '';
                     let experience = lines.find(x => /经验|应届|在校|不限/.test(x) && x.length < 30) || '';
                     let education = lines.find(x => /本科|硕士|博士|大专|学历不限|中专|高中/.test(x) && x.length < 30) || '';
                     title = clean(title);
-                    salary = clean(salary);
+                    salary = findSalary([salary]) || clean(salary);
                     city = clean(city);
                     let company = pickCompany(card, title, salary, city);
                     let companyProfile = pickCompanyProfile(card);
@@ -911,7 +941,7 @@ class BossScraper:
 
     def fetch_detail(self, url):
         """访问详情页，提取岗位描述 + HR/招聘者信息"""
-        result = {"description": "", "hr_name": "", "hr_title": ""}
+        result = {"description": "", "hr_name": "", "hr_title": "", "company_size": "", "financing": "", "salary": ""}
         try:
             self.page.goto(url, wait_until="load", timeout=45000)
             pause(2, 4)
@@ -960,6 +990,14 @@ class BossScraper:
             # ── 提取岗位描述 ──
             body = self.page.inner_text("body")
             lines = [l.strip() for l in body.split("\n") if l.strip()]
+            profile = pick_company_profile_from_lines(lines)
+            result["company_size"] = profile.get("company_size", "")
+            result["financing"] = profile.get("financing", "")
+            for line in lines:
+                salary = extract_salary(line)
+                if salary:
+                    result["salary"] = salary
+                    break
 
             skill_lines = []
             capture = False

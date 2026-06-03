@@ -254,6 +254,47 @@ def _search_job_payload(job: dict, application: Optional[dict] = None) -> dict:
     }
 
 
+async def _enrich_missing_job_profile(jobs: List[dict], max_jobs: int = 12):
+    if not automation or not jobs:
+        return jobs
+    enriched = 0
+    for job in jobs:
+        if enriched >= max_jobs:
+            break
+        if not job.get("url"):
+            continue
+        job["url"] = _normalize_job_url(job.get("url", ""))
+        needs_profile = not (
+            job.get("company_size")
+            or job.get("companySize")
+            or job.get("financing")
+            or job.get("finance_stage")
+            or job.get("financing_stage")
+        )
+        if not needs_profile:
+            continue
+        try:
+            detail = await _run_pw(automation.fetch_detail, job["url"])
+        except Exception:
+            continue
+        if not detail:
+            continue
+        if detail.get("company_size"):
+            job["company_size"] = detail["company_size"]
+        if detail.get("financing"):
+            job["financing"] = detail["financing"]
+        if detail.get("salary"):
+            job["salary"] = detail["salary"]
+        if detail.get("description") and not job.get("description"):
+            job["description"] = detail["description"]
+        if detail.get("hr_name") and not job.get("hr_name"):
+            job["hr_name"] = detail["hr_name"]
+        if detail.get("hr_title") and not job.get("hr_title"):
+            job["hr_title"] = detail["hr_title"]
+        enriched += 1
+    return jobs
+
+
 def _clean_messages_for_web(messages: List[dict]) -> List[dict]:
     """清理 BOSS DOM 里混入的已读/送达状态，保持 Web 端只展示聊天正文。"""
     cleaned = []
@@ -671,6 +712,8 @@ async def search_jobs(req: SearchRequest):
             welfare_kw = [w.strip() for w in req.welfare.split(",") if w.strip()]
             jobs = automation._filter_by_welfare(jobs, welfare_kw)
 
+        jobs = await _enrich_missing_job_profile(jobs)
+
         saved_ids = []
         result_jobs = []
         for j in jobs:
@@ -793,6 +836,8 @@ async def scan_current_page():
         jobs = await _run_pw(automation.scan_current_page)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"扫描失败: {e}")
+
+    jobs = await _enrich_missing_job_profile(jobs)
 
     saved_ids = []
     result_jobs = []

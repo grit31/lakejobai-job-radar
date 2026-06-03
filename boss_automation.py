@@ -11,7 +11,15 @@ from typing import Optional, List, Dict, Any
 
 from playwright.sync_api import Locator
 
-from boss_firefox import BossScraper, pause, decode_salary, pick_company_from_lines, pick_company_profile_from_lines
+from boss_firefox import (
+    BossScraper,
+    pause,
+    decode_salary,
+    extract_salary,
+    looks_like_salary,
+    pick_company_from_lines,
+    pick_company_profile_from_lines,
+)
 from boss_state import (
     init_db,
     add_application,
@@ -203,6 +211,101 @@ class BossAutomation(BossScraper):
         except Exception:
             return False
 
+    def _visible_prompt_text(self) -> str:
+        """读取可见弹窗/提示条文本，避免把岗位正文误判为风控提示。"""
+        selectors = [
+            '[role="dialog"]',
+            '[aria-modal="true"]',
+            ".boss-popup",
+            ".boss-popup__content",
+            ".boss-dialog",
+            ".dialog",
+            ".dialog-wrap",
+            ".modal",
+            ".toast",
+            ".tips",
+            ".notice",
+            ".verify-slider",
+            ".geetest_panel",
+            ".captcha",
+            '[class*="popup"]',
+            '[class*="dialog"]',
+            '[class*="modal"]',
+            '[class*="toast"]',
+            '[class*="captcha"]',
+            '[class*="verify"]',
+            '[class*="security"]',
+            '[class*="risk"]',
+        ]
+        try:
+            samples = self.page.evaluate(
+                """(arg) => {
+                    const visible = (el) => {
+                        const rect = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+                        return rect.width > 0 && rect.height > 0 &&
+                            style.display !== 'none' &&
+                            style.visibility !== 'hidden' &&
+                            style.opacity !== '0';
+                    };
+                    const out = [];
+                    const seen = new Set();
+                    for (const sel of arg.selectors) {
+                        for (const el of document.querySelectorAll(sel)) {
+                            if (!visible(el)) continue;
+                            const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+                            if (!text || seen.has(text)) continue;
+                            seen.add(text);
+                            out.push(text.slice(0, arg.maxLen));
+                            if (out.length >= arg.maxItems) return out;
+                        }
+                    }
+                    return out;
+                }""",
+                {"selectors": selectors, "maxItems": 8, "maxLen": 300},
+            )
+            if isinstance(samples, list):
+                return "\n".join(str(s) for s in samples if s)
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def _looks_like_job_detail(text: str) -> bool:
+        return any(kw in text for kw in ["职位描述", "岗位职责", "公司基本信息", "立即沟通", "继续沟通"])
+
+    @staticmethod
+    def _has_account_issue_text(text: str) -> bool:
+        strong_markers = [
+            "账号异常",
+            "账户异常",
+            "帐号异常",
+            "账号存在异常",
+            "账号已冻结",
+            "账号被冻结",
+            "账户已冻结",
+            "帐号已冻结",
+            "账号被限制",
+            "账户被限制",
+            "帐号被限制",
+        ]
+        if any(kw in text for kw in strong_markers):
+            return True
+        account_words = ["账号", "账户", "帐号", "登录", "当前用户"]
+        if "限制使用" in text and any(kw in text for kw in account_words):
+            return True
+        if "冻结" in text and any(kw in text for kw in account_words):
+            return True
+        if "违规" in text and any(kw in text for kw in account_words + ["行为", "操作"]):
+            return True
+        return False
+
+    @staticmethod
+    def _log_safety_match(kind: str, text: str):
+        preview = (text or "").replace("\n", " | ").strip()[:220]
+        if preview:
+            print(f"  [安全检查] 命中{kind}: {preview}")
+
     # ══════════════════════════════════════
     #  安全检查
     # ══════════════════════════════════════
@@ -214,6 +317,8 @@ class BossAutomation(BossScraper):
             body = self.page.inner_text("body")
             body_lower = body.lower()
             head = body_lower[:1500]
+            prompt_text = self._visible_prompt_text()
+            prompt_lower = prompt_text.lower()
 
             if self._login_prompt_visible():
                 return "BOSS 登录状态失效，需要到设置里重新扫码登录"
@@ -227,13 +332,33 @@ class BossAutomation(BossScraper):
                 "captcha",
                 "verify",
             ]
+            if prompt_lower:
+                if any(kw in prompt_lower for kw in captcha_markers):
+                    self._log_safety_match("可见验证提示", prompt_text)
+                    return "BOSS 触发了安全验证/验证码，请先在浏览器里手动完成验证"
+                if "验证" in prompt_lower and any(kw in prompt_lower for kw in ["验证码", "身份", "安全", "手机号"]):
+                    self._log_safety_match("可见验证流程", prompt_text)
+                    return "BOSS 触发了验证流程，请先在浏览器里手动处理"
+                if self._has_account_issue_text(prompt_lower):
+                    self._log_safety_match("可见账号风控提示", prompt_text)
+                    return "BOSS 提示账号异常或限制使用，请先手动检查账号状态"
+                if any(kw in prompt_lower for kw in ["操作太频繁", "稍后再试", "休息一下", "沟通人数已用完"]):
+                    self._log_safety_match("可见频率限制提示", prompt_text)
+                    return "BOSS 提示操作太频繁或今日沟通次数受限，请稍后再试"
+
             if any(kw in head for kw in captcha_markers):
+                self._log_safety_match("整页验证提示", head)
                 return "BOSS 触发了安全验证/验证码，请先在浏览器里手动完成验证"
             if "验证" in head and any(kw in head for kw in ["验证码", "身份", "安全", "手机号"]):
+                self._log_safety_match("整页验证流程", head)
                 return "BOSS 触发了验证流程，请先在浏览器里手动处理"
-            if any(kw in head for kw in ["账号异常", "违规", "限制使用", "冻结"]):
+            if not self._looks_like_job_detail(head) and self._has_account_issue_text(head):
+                self._log_safety_match("整页账号风控提示", head)
                 return "BOSS 提示账号异常或限制使用，请先手动检查账号状态"
-            if any(kw in head for kw in ["操作太频繁", "稍后再试", "休息一下", "沟通人数已用完"]):
+            if not self._looks_like_job_detail(head) and any(
+                kw in head for kw in ["操作太频繁", "稍后再试", "休息一下", "沟通人数已用完"]
+            ):
+                self._log_safety_match("整页频率限制提示", head)
                 return "BOSS 提示操作太频繁或今日沟通次数受限，请稍后再试"
             return ""
         except Exception:
@@ -333,9 +458,14 @@ class BossAutomation(BossScraper):
                 return {"success": False, "message": safety_issue}
 
             detail_profile = {"company_size": "", "financing": ""}
+            detail_salary = ""
             try:
                 detail_lines = [l.strip() for l in self.page.inner_text("body").split("\n") if l.strip()]
                 detail_profile = pick_company_profile_from_lines(detail_lines)
+                for line in detail_lines:
+                    detail_salary = extract_salary(line)
+                    if detail_salary:
+                        break
             except Exception:
                 pass
 
@@ -411,6 +541,7 @@ class BossAutomation(BossScraper):
                 "url": job_url,
                 "company_size": detail_profile.get("company_size", ""),
                 "financing": detail_profile.get("financing", ""),
+                "salary": detail_salary,
             }
             if existing:
                 if detail_profile.get("company_size") or detail_profile.get("financing"):
@@ -1218,7 +1349,7 @@ class BossAutomation(BossScraper):
         jobs = self._extract_job_cards()
         if not jobs:
             lines = [l.strip() for l in self.page.inner_text("body").split("\n") if l.strip()]
-            sal_idx = [i for i, l in enumerate(lines) if re.search(r"\d+[-~]\d+K", decode_salary(l), re.I)]
+            sal_idx = [i for i, l in enumerate(lines) if looks_like_salary(l)]
             for n, si in enumerate(sal_idx):
                 if n > 0 and si - sal_idx[n - 1] < 3:
                     continue
@@ -1227,7 +1358,7 @@ class BossAutomation(BossScraper):
                 title = lines[si - 1]
                 if not (2 < len(title) < 60):
                     continue
-                salary = decode_salary(lines[si])
+                salary = extract_salary(lines[si]) or decode_salary(lines[si])
                 exp = edu = city = ""
                 end = sal_idx[n + 1] if n + 1 < len(sal_idx) else min(si + 10, len(lines))
                 card_lines = lines[si + 1 : min(end, len(lines))]
