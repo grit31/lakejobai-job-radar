@@ -1277,12 +1277,12 @@ async def chat_monitor_loop():
             if result.get("wechat_exchanged"):
                 await broadcast_ws({"type": "wechat_exchanged"})
 
-            safety_ok = await _run_pw(automation.check_page_safety)
-            if not safety_ok:
+            safety_issue = await _run_pw(automation.get_page_safety_issue)
+            if safety_issue:
                 await broadcast_ws(
                     {
                         "type": "safety_warning",
-                        "message": "检测到页面异常(验证码/登录失效/账号限制)，已暂停自动操作。请手动检查浏览器。",
+                        "message": f"{safety_issue}，已暂停自动操作。请手动检查浏览器。",
                     }
                 )
                 break

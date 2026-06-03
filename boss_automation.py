@@ -207,28 +207,45 @@ class BossAutomation(BossScraper):
     #  安全检查
     # ══════════════════════════════════════
 
-    def check_page_safety(self) -> bool:
-        """所有自动化操作前检查页面安全状态。"""
+    def get_page_safety_issue(self) -> str:
+        """返回当前页面阻止自动化操作的原因；空字符串表示安全。"""
         try:
             url = self.page.url
             body = self.page.inner_text("body")
             body_lower = body.lower()
+            head = body_lower[:1500]
 
             if self._login_prompt_visible():
-                print("  ⚠️ 安全检查: 需要重新登录")
-                return False
-            if any(kw in body_lower[:500] for kw in ["验证", "滑块", "拼图", "captcha", "verify"]):
-                print("  ⚠️ 安全检查: 检测到验证码")
-                return False
-            if any(kw in body_lower[:500] for kw in ["账号异常", "违规", "限制使用", "冻结"]):
-                print("  ⚠️ 安全检查: 账号异常")
-                return False
-            if any(kw in body_lower[:500] for kw in ["操作太频繁", "稍后再试", "休息一下"]):
-                print("  ⚠️ 安全检查: 操作频率限制")
-                return False
-            return True
+                return "BOSS 登录状态失效，需要到设置里重新扫码登录"
+            captcha_markers = [
+                "安全验证",
+                "请完成验证",
+                "拖动滑块",
+                "向右滑动",
+                "滑块",
+                "拼图",
+                "captcha",
+                "verify",
+            ]
+            if any(kw in head for kw in captcha_markers):
+                return "BOSS 触发了安全验证/验证码，请先在浏览器里手动完成验证"
+            if "验证" in head and any(kw in head for kw in ["验证码", "身份", "安全", "手机号"]):
+                return "BOSS 触发了验证流程，请先在浏览器里手动处理"
+            if any(kw in head for kw in ["账号异常", "违规", "限制使用", "冻结"]):
+                return "BOSS 提示账号异常或限制使用，请先手动检查账号状态"
+            if any(kw in head for kw in ["操作太频繁", "稍后再试", "休息一下", "沟通人数已用完"]):
+                return "BOSS 提示操作太频繁或今日沟通次数受限，请稍后再试"
+            return ""
         except Exception:
-            return True
+            return ""
+
+    def check_page_safety(self) -> bool:
+        """所有自动化操作前检查页面安全状态。"""
+        issue = self.get_page_safety_issue()
+        if issue:
+            print(f"  ⚠️ 安全检查: {issue}")
+            return False
+        return True
 
     # ══════════════════════════════════════
     #  Session 保活 & 心跳
@@ -310,8 +327,10 @@ class BossAutomation(BossScraper):
             self.page.goto(job_url, wait_until="load", timeout=45000)
             pause(1, 2)
 
-            if not self.check_page_safety():
-                return {"success": False, "message": "安全检查未通过"}
+            safety_issue = self.get_page_safety_issue()
+            if safety_issue:
+                print(f"  ⚠️ 安全检查: {safety_issue}")
+                return {"success": False, "message": safety_issue}
 
             detail_profile = {"company_size": "", "financing": ""}
             try:
@@ -486,8 +505,10 @@ class BossAutomation(BossScraper):
             self.page.goto(job_url, wait_until="load", timeout=45000)
             pause(1, 2)
 
-            if not self.check_page_safety():
-                return {"success": False, "message": "安全检查未通过"}
+            safety_issue = self.get_page_safety_issue()
+            if safety_issue:
+                print(f"  ⚠️ 安全检查: {safety_issue}")
+                return {"success": False, "message": safety_issue}
 
             continue_btn = self._find_element(
                 [
